@@ -45,7 +45,7 @@ A sophisticated time visualization and Conway's Game of Life display component f
 ### Tested Hardware
 
 - Adafruit Matrix Portal S3
-- 64×64 HUB75 RGB LED panels (2x chained)
+- 64×32 HUB75 RGB LED panels (2x chained)
 
 ## Installation
 
@@ -58,7 +58,7 @@ A sophisticated time visualization and Conway's Game of Life display component f
 
 ```yaml
 external_components:
-  - source: github://username/esphome-life-matrix
+  - source: github://bogdanr/life-matrix
     components: [ life_matrix ]
 ```
 
@@ -338,7 +338,7 @@ binary_sensor:
 
 ## License
 
-MIT License - See LICENSE file for details
+GPLv3 License - See LICENSE file for details
 
 ## Contributing
 
@@ -359,6 +359,6 @@ Developed for the Adafruit Matrix Portal S3 as part of the Life Matrix project.
 
 ## Support
 
-- GitHub Issues: [Project Issue Tracker]
+- GitHub Issues: https://github.com/bogdanr/life-matrix/issues
 - ESPHome Discord: `#custom-components`
 - Documentation: This README and inline code comments
