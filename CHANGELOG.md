@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta.3] - 2026-02-17
+
+### Fixed
+- Game of Life now only runs when visible (not in background) - saves CPU and prevents issues
+- Web interface screen toggle switches now properly sync with physical UI state
+- Neopixel status LED now shows UI mode (Blue=Auto, Green=Manual, Yellow=Settings) instead of mirroring current pixel
+- GoL auto-reset timeout fixed - properly waits 60s after stability before reset
+- Settings mode now pauses screen cycling to prevent unexpected screen jumps during adjustment
+
+### Added
+- Time override feature for testing visualizations - set custom time via web interface (format: YYYY-MM-DD HH:MM:SS)
+- Bidirectional sync between physical encoders and Home Assistant entities
+- Better integration between web interface controls and physical device state
+
+### Changed
+- Improved screen registration system for better enable/disable handling
+- Enhanced HA entity synchronization on boot
+
+### Status
+- ✅ **Ready for hardware beta testing**
+- ✅ All 6 screens rendering at 100%
+- ✅ Physical UI fully functional with 2 encoders + buttons
+- ✅ Web interface fully synced with device state
+- ✅ OTA updates with progress display working
+
 ## [1.0.0-beta.2] - 2026-02-16
 
 ### Added - ALL FEATURES NOW COMPLETE! 🎉
