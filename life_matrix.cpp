@@ -21,6 +21,10 @@ void LifeMatrix::setup() {
   game_demo_mode_ = true;
   game_demo_start_time_ = millis();
 
+  // Lifespan: extract birthdays into lifespan_year_events_ and precompute active phases
+  apply_lifespan_year_events();
+  precompute_lifespan_phases();
+
   // Set initial status LED state
   update_status_led();
 }
@@ -862,6 +866,7 @@ void LifeMatrix::register_screen(int screen_id, bool enabled) {
       case SCREEN_HOUR: config.name = "Hour"; break;
       case SCREEN_HABITS: config.name = "Habits"; break;
       case SCREEN_GAME_OF_LIFE: config.name = "Conway"; break;
+      case SCREEN_LIFESPAN:     config.name = "Life"; break;
       default: config.name = "Unknown"; break;
     }
 
@@ -1003,6 +1008,23 @@ Color LifeMatrix::hsv_to_rgb(int hue, float saturation, float value) {
   }
 }
 
+// draw_pixel: routes all main-display pixels through the active per-frame color transform.
+// CTM_HUE_SHIFT uses a precomputed circulant matrix (set in render() pre-render block):
+//   a = cosθ + (1-cosθ)/3   b = (1-cosθ)/3 + sinθ/√3   c = (1-cosθ)/3 - sinθ/√3
+//   r' = a·r + c·g + b·b    g' = b·r + a·g + c·b    b' = c·r + b·g + a·b
+// Celebration overlay functions call it.draw_pixel_at directly to bypass transforms.
+void LifeMatrix::draw_pixel(display::Display &it, int x, int y, Color c) {
+  if (ctm_ == CTM_HUE_SHIFT && (c.r | c.g | c.b)) {
+    int r = (int)(c.r * hue_mat_a_ + c.g * hue_mat_c_ + c.b * hue_mat_b_);
+    int g = (int)(c.r * hue_mat_b_ + c.g * hue_mat_a_ + c.b * hue_mat_c_);
+    int b = (int)(c.r * hue_mat_c_ + c.g * hue_mat_b_ + c.b * hue_mat_a_);
+    c = Color((uint8_t)(r < 0 ? 0 : r > 255 ? 255 : r),
+              (uint8_t)(g < 0 ? 0 : g > 255 ? 255 : g),
+              (uint8_t)(b < 0 ? 0 : b > 255 ? 255 : b));
+  }
+  it.draw_pixel_at(x, y, c);
+}
+
 void LifeMatrix::render(display::Display &it, ESPTime &time) {
   // OTA guard - show minimal UI during update
   if (ota_in_progress_) {
@@ -1050,6 +1072,24 @@ void LifeMatrix::render(display::Display &it, ESPTime &time) {
     return;
   }
 
+  // Pre-render: configure color transform for CELEB_HUE_CYCLE.
+  // Precompute the circulant hue-rotation matrix once per frame (2 trig calls total).
+  ctm_ = CTM_NONE;
+  hue_mat_a_ = 1.f; hue_mat_b_ = 0.f; hue_mat_c_ = 0.f;  // identity
+  if (celebration_active_ && celeb_seq_idx_ < celeb_seq_len_ &&
+      celeb_sequence_[celeb_seq_idx_] == CELEB_HUE_CYCLE) {
+    uint32_t pre_elapsed = (uint32_t)(millis() - celebration_start_);
+    uint32_t dur = get_celeb_duration(CELEB_HUE_CYCLE);
+    float theta = (float)(pre_elapsed % dur) * (6.28318f / (float)dur);  // 0 → 2π over duration
+    float cos_h = cosf(theta), sin_h = sinf(theta);
+    float k = (1.f - cos_h) / 3.f;
+    float s = sin_h * 0.57735f;  // sinθ / √3
+    hue_mat_a_ = cos_h + k;
+    hue_mat_b_ = k + s;
+    hue_mat_c_ = k - s;
+    ctm_ = CTM_HUE_SHIFT;
+  }
+
   // Render the appropriate screen
   switch (screen_id) {
     case SCREEN_YEAR:
@@ -1067,6 +1107,9 @@ void LifeMatrix::render(display::Display &it, ESPTime &time) {
     case SCREEN_GAME_OF_LIFE:
       render_game_of_life(it, vp.viz_y, vp.viz_height);
       break;
+    case SCREEN_LIFESPAN:
+      render_lifespan_view(it, display_time, vp.viz_y, vp.viz_height);
+      break;
     case SCREEN_HABITS:
       // Placeholder for habits screen
       {
@@ -1078,14 +1121,23 @@ void LifeMatrix::render(display::Display &it, ESPTime &time) {
       break;
   }
 
-  // Celebration overlay (sparkle burst on event days, time screens only)
+  // Celebration sequence: advance phases, draw overlays for styles that need them
   if (celebration_active_) {
     bool is_time_screen = (screen_id == SCREEN_HOUR || screen_id == SCREEN_DAY ||
                            screen_id == SCREEN_MONTH || screen_id == SCREEN_YEAR);
     uint32_t elapsed = (uint32_t)(millis() - celebration_start_);
-    if (elapsed >= 3000) {
-      celebration_active_ = false;
-    } else if (is_time_screen) {
+    CelebrationStyle cur_style = celeb_sequence_[celeb_seq_idx_];
+    uint32_t cur_dur = get_celeb_duration(cur_style);
+
+    if (elapsed >= cur_dur) {
+      celeb_seq_idx_++;
+      if (celeb_seq_idx_ >= celeb_seq_len_) {
+        celebration_active_ = false;
+      } else {
+        celebration_start_ = millis();
+      }
+    } else if (is_time_screen && cur_style != CELEB_HUE_CYCLE) {
+      // HUE_CYCLE works entirely via the pre-render matrix transform — no overlay needed
       render_celebration_overlay(it, elapsed);
     }
   }
@@ -1128,22 +1180,22 @@ void LifeMatrix::render_game_of_life(display::Display &it, int viz_y, int viz_he
       Color pattern_color = Color(80, 80, 120);
 
       // Glider (left side)
-      it.draw_pixel_at(6, 40, pattern_color);
-      it.draw_pixel_at(7, 41, pattern_color);
-      it.draw_pixel_at(5, 42, pattern_color);
-      it.draw_pixel_at(6, 42, pattern_color);
-      it.draw_pixel_at(7, 42, pattern_color);
+      draw_pixel(it, 6, 40, pattern_color);
+      draw_pixel(it, 7, 41, pattern_color);
+      draw_pixel(it, 5, 42, pattern_color);
+      draw_pixel(it, 6, 42, pattern_color);
+      draw_pixel(it, 7, 42, pattern_color);
 
       // Blinker (center)
-      it.draw_pixel_at(15, 41, pattern_color);
-      it.draw_pixel_at(16, 41, pattern_color);
-      it.draw_pixel_at(17, 41, pattern_color);
+      draw_pixel(it, 15, 41, pattern_color);
+      draw_pixel(it, 16, 41, pattern_color);
+      draw_pixel(it, 17, 41, pattern_color);
 
       // Block (right side)
-      it.draw_pixel_at(25, 41, pattern_color);
-      it.draw_pixel_at(26, 41, pattern_color);
-      it.draw_pixel_at(25, 42, pattern_color);
-      it.draw_pixel_at(26, 42, pattern_color);
+      draw_pixel(it, 25, 41, pattern_color);
+      draw_pixel(it, 26, 41, pattern_color);
+      draw_pixel(it, 25, 42, pattern_color);
+      draw_pixel(it, 26, 42, pattern_color);
 
       it.print(center_x, 50, font_small_, color_active_, display::TextAlign::TOP_CENTER, "Rules:");
       it.print(center_x, 62, font_small_, Color(0, 255, 150), display::TextAlign::TOP_CENTER, "2-3 OK");
@@ -1217,7 +1269,7 @@ void LifeMatrix::render_game_of_life(display::Display &it, int viz_y, int viz_he
           cell_color = hsv_to_rgb(hue, 1.0f, 1.0f);
         }
 
-        it.draw_pixel_at(col, y_pos, cell_color);
+        draw_pixel(it, col, y_pos, cell_color);
       }
     }
   }
@@ -1258,12 +1310,12 @@ void LifeMatrix::render_big_bang_animation(display::Display &it, int viz_y, int 
 
       if (dist2 <= cc_r2) {
         // White center circle (drawn on top of ring)
-        it.draw_pixel_at(col, y_pos, Color(255, 255, 255));
+        draw_pixel(it, col, y_pos, Color(255, 255, 255));
       } else if (dist2 >= inner_r2 && dist2 <= outer_r2) {
         // Rainbow ring — atan2f only for the few ring pixels
         int hue = (int)((atan2f(dy, dx) + 3.14159f) * 57.2958f);
         hue = (hue + hue_offset) % 360;
-        it.draw_pixel_at(col, y_pos, hsv_to_rgb(hue, 1.0f, brightness));
+        draw_pixel(it, col, y_pos, hsv_to_rgb(hue, 1.0f, brightness));
       }
     }
   }
@@ -1480,7 +1532,7 @@ void LifeMatrix::render_month_view(display::Display &it, ESPTime &time, int viz_
             draw_c = border_clr;
           }
         }
-        it.draw_pixel_at(cx + bx, y_pos, draw_c);
+        draw_pixel(it, cx + bx, y_pos, draw_c);
       }
     }
   }
@@ -1508,7 +1560,7 @@ void LifeMatrix::render_month_view(display::Display &it, ESPTime &time, int viz_
       (uint8_t)(rainbow.g * breath_factor),
       (uint8_t)(rainbow.b * breath_factor)
     );
-    it.draw_pixel_at(pixel_x, pixel_y, breathing);
+    draw_pixel(it, pixel_x, pixel_y, breathing);
   }
 }
 
@@ -1599,7 +1651,7 @@ void LifeMatrix::render_day_view(display::Display &it, ESPTime &time, int viz_y,
         pixel_color = hsv_to_rgb(hue, 1.0f, 1.0f);
       }
 
-      it.draw_pixel_at(col, y_pos, pixel_color);
+      draw_pixel(it, col, y_pos, pixel_color);
     }
   }
 }
@@ -1652,7 +1704,7 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
       int draw_row = quarter_start_row;
       for (int draw_col = 1; draw_col <= 30 && spiral_pos < seconds_in_quarter; draw_col++) {
         int y_pos = fill_direction_bottom_to_top_ ? (viz_y + viz_height - 1 - draw_row) : (viz_y + draw_row);
-        it.draw_pixel_at(draw_col, y_pos, quarter_color);
+        draw_pixel(it, draw_col, y_pos, quarter_color);
         spiral_pos++;
       }
 
@@ -1671,7 +1723,7 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
 
           int abs_row = quarter_start_row + current_spiral_row;
           int y_pos = fill_direction_bottom_to_top_ ? (viz_y + viz_height - 1 - abs_row) : (viz_y + abs_row);
-          it.draw_pixel_at(current_col + 1, y_pos, quarter_color);
+          draw_pixel(it, current_col + 1, y_pos, quarter_color);
           spiral_pos++;
         }
         direction = (direction + 1) % 4;
@@ -1683,7 +1735,7 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
 
           int abs_row = quarter_start_row + current_spiral_row;
           int y_pos = fill_direction_bottom_to_top_ ? (viz_y + viz_height - 1 - abs_row) : (viz_y + abs_row);
-          it.draw_pixel_at(current_col + 1, y_pos, quarter_color);
+          draw_pixel(it, current_col + 1, y_pos, quarter_color);
           spiral_pos++;
         }
         direction = (direction + 1) % 4;
@@ -1737,7 +1789,7 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
       }
       // else: Single Color - use color_active_ (already set)
 
-      it.draw_pixel_at(x_pos, y_pos, pixel_color);
+      draw_pixel(it, x_pos, y_pos, pixel_color);
     }
   }
 }
@@ -1803,7 +1855,7 @@ void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y
         int mark_y = fill_direction_bottom_to_top_ ? (viz_y + viz_height - 1 - mark_row) : (viz_y + mark_row);
 
         if (marker_style_ == MARKER_SINGLE_DOT) {
-          it.draw_pixel_at(0, mark_y, marker_clr);
+          draw_pixel(it, 0, mark_y, marker_clr);
         } else if (marker_style_ == MARKER_GRADIENT_PEAK) {
           // Gradient peak: 5 pixels with intensity gradient
           for (int gi = 0; gi < 5; gi++) {
@@ -1815,7 +1867,7 @@ void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y
                 (uint8_t)(marker_clr.g * intensity),
                 (uint8_t)(marker_clr.b * intensity)
               );
-              it.draw_pixel_at(0, dot_y, faded);
+              draw_pixel(it, 0, dot_y, faded);
             }
           }
         }
@@ -1894,7 +1946,7 @@ void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y
         event_marker_color = Color(event_marker_color.r >> 3, event_marker_color.g >> 3, event_marker_color.b >> 3);
       }
 
-      it.draw_pixel_at(0, screen_y, event_marker_color);
+      draw_pixel(it, 0, screen_y, event_marker_color);
     }
   }
 
@@ -1936,7 +1988,7 @@ void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y
             pixel_color = activity_colors[month_idx][activity_type];
           }
 
-          it.draw_pixel_at(day, screen_y, pixel_color);
+          draw_pixel(it, day, screen_y, pixel_color);
         }
       } else if (is_today) {
         // Today: fill up to current time
@@ -1964,7 +2016,7 @@ void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y
             pixel_color = activity_colors[month_idx][activity_type];
           }
 
-          it.draw_pixel_at(day, screen_y, pixel_color);
+          draw_pixel(it, day, screen_y, pixel_color);
         }
       } else if (has_event && year_event_style_ == YEAR_EVENT_PULSE) {
         // Future event with pulse: dim static preview
@@ -1982,7 +2034,7 @@ void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y
             event_colors[month_idx].b >> 2
           );
 
-          it.draw_pixel_at(day, screen_y, pixel_color);
+          draw_pixel(it, day, screen_y, pixel_color);
         }
       }
       // Future non-event days: leave black (skip)
@@ -2013,24 +2065,28 @@ void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y
       (uint8_t)(rainbow.b * breath_factor)
     );
 
-    it.draw_pixel_at(0, screen_y, breathing);
+    draw_pixel(it, 0, screen_y, breathing);
   }
 }
 
 void LifeMatrix::check_celebration(ESPTime &time) {
-  // Re-trigger once per hour on event days
-  if (time.hour == last_celebration_hour_ &&
-      time.day_of_month == last_celebration_day_ &&
-      time.month == last_celebration_month_)
-    return;  // Same hour, no check needed
-  last_celebration_hour_  = time.hour;
-  last_celebration_day_   = time.day_of_month;
-  last_celebration_month_ = time.month;
+  // Re-trigger once per minute on event days
+  if (time.hour   == last_celebration_hour_   &&
+      time.minute == last_celebration_minute_ &&
+      time.day_of_month == last_celebration_day_   &&
+      time.month  == last_celebration_month_)
+    return;
+  last_celebration_hour_   = time.hour;
+  last_celebration_minute_ = time.minute;
+  last_celebration_day_    = time.day_of_month;
+  last_celebration_month_  = time.month;
   for (const auto &evt : year_events_) {
     if (evt.month == time.month && evt.day == time.day_of_month) {
       celebration_active_ = true;
       celebration_start_  = millis();
-      ESP_LOGD(TAG, "Celebration triggered for %d-%02d h%d", time.month, time.day_of_month, time.hour);
+      celeb_seq_idx_ = 0;
+      ctm_           = CTM_NONE;
+      ESP_LOGD(TAG, "Celebration triggered for %d-%02d %02d:%02d", time.month, time.day_of_month, time.hour, time.minute);
       break;
     }
   }
@@ -2088,14 +2144,125 @@ void LifeMatrix::render_plasma_celebration(display::Display &it, uint32_t elapse
 }
 
 void LifeMatrix::render_celebration_overlay(display::Display &it, uint32_t elapsed_ms) {
-  switch (celebration_style_) {
-    case CELEB_PLASMA:
-      render_plasma_celebration(it, elapsed_ms);
-      break;
+  CelebrationStyle cur_style =
+      (celeb_seq_idx_ < celeb_seq_len_) ? celeb_sequence_[celeb_seq_idx_] : CELEB_SPARKLE;
+  switch (cur_style) {
+    case CELEB_PLASMA:    render_plasma_celebration(it, elapsed_ms);    break;
+    case CELEB_FIREWORKS: render_fireworks_celebration(it, elapsed_ms); break;
     case CELEB_SPARKLE:
-    default:
-      render_sparkle_celebration(it, elapsed_ms);
-      break;
+    default:              render_sparkle_celebration(it, elapsed_ms);   break;
+  }
+}
+
+uint32_t LifeMatrix::get_celeb_duration(CelebrationStyle style) {
+  switch (style) {
+    case CELEB_FIREWORKS: return 5000;
+    case CELEB_HUE_CYCLE: return 5000;  // one full 360° cycle (2π radians)
+    case CELEB_PLASMA:    return 3000;
+    case CELEB_SPARKLE:
+    default:              return 3000;
+  }
+}
+
+// ============================================================================
+// FIREWORKS — 7 staggered rockets, 20 sparks each, trailing streaks,
+//             burst core flash, and a secondary mini-burst per firework.
+// ============================================================================
+void LifeMatrix::render_fireworks_celebration(display::Display &it, uint32_t elapsed_ms) {
+  struct FireworkDef {
+    uint32_t start_ms;
+    int8_t   launch_x, burst_x, burst_y;
+    int16_t  base_hue;
+    uint8_t  num_sparks;
+  };
+  static const FireworkDef FWS[] = {
+    {100,   8, 10, 24,   0, 20},  // red
+    {700,  24, 22, 14, 120, 20},  // green
+    {1300, 14, 16, 32,  55, 22},  // yellow
+    {1900,  5,  7, 18, 200, 20},  // cyan  \_ near-simultaneous double burst
+    {2000, 27, 25, 24, 280, 20},  // purple/
+    {2700, 12, 14, 14, 330, 20},  // pink
+    {3300, 20, 22, 28,  30, 20},  // orange
+  };
+  static constexpr float    PI_F      = 3.14159265f;
+  static constexpr uint32_t ROCKET_MS = 550;   // ascent duration
+  static constexpr uint32_t SPARK_MS  = 1600;  // primary spark lifetime
+  static constexpr uint32_t FLASH_MS  = 120;   // burst-core flash duration
+  static constexpr uint32_t SEC_START = 500;   // secondary burst delay after ROCKET_MS
+  static constexpr uint32_t SEC_MS    = 900;   // secondary spark lifetime
+  static constexpr float GRAVITY      = 22.f;
+  static constexpr float SPEED_BASE   = 14.f;
+
+  int w = it.get_width(), h = it.get_height();
+
+  for (const auto &fw : FWS) {
+    if (elapsed_ms < fw.start_ms) continue;
+    uint32_t fw_t = elapsed_ms - fw.start_ms;
+
+    // ---- Rocket ascent (4-pixel trail) ----
+    if (fw_t < ROCKET_MS) {
+      float prog = (float)fw_t / (float)ROCKET_MS;
+      for (int seg = 0; seg < 4; seg++) {
+        float p = prog - (float)seg * 0.06f;
+        if (p < 0.f) break;
+        int ix = (int)roundf(fw.launch_x + (fw.burst_x - fw.launch_x) * p);
+        int iy = (int)roundf((h - 1) + (fw.burst_y - (h - 1)) * p);
+        if (ix >= 0 && ix < w && iy >= 0 && iy < h) {
+          float br = (seg == 0) ? 1.f : (seg == 1 ? 0.6f : seg == 2 ? 0.28f : 0.10f);
+          it.draw_pixel_at(ix, iy, Color((uint8_t)(255*br), (uint8_t)(215*br), 0));
+        }
+      }
+      continue;
+    }
+
+    // ---- Burst-core flash (white 3×3 glow for FLASH_MS) ----
+    uint32_t post = fw_t - ROCKET_MS;
+    if (post < FLASH_MS) {
+      float flash = 1.f - (float)post / (float)FLASH_MS;
+      for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+        int ix = fw.burst_x + dx, iy = fw.burst_y + dy;
+        if (ix >= 0 && ix < w && iy >= 0 && iy < h)
+          it.draw_pixel_at(ix, iy, Color((uint8_t)(255*flash), (uint8_t)(255*flash), (uint8_t)(255*flash)));
+      }
+    }
+
+    // ---- Primary sparks with 3-step trailing streaks ----
+    if (post < SPARK_MS) {
+      float t = (float)post * 0.001f;
+      float life_frac = (float)post / (float)SPARK_MS;
+      float brightness = 1.f - life_frac;
+      for (int i = 0; i < fw.num_sparks; i++) {
+        float angle = ((float)i * (360.f / fw.num_sparks) + (float)(i % 5) * 8.f) * PI_F / 180.f;
+        float speed = SPEED_BASE + (float)(i % 5) * 2.f;  // 14–22 px/s
+        for (int tr = 0; tr < 3; tr++) {
+          float tt = t - (float)tr * 0.07f;
+          if (tt <= 0.f) break;
+          float dx = cosf(angle) * speed * tt;
+          float dy = -sinf(angle) * speed * tt + 0.5f * GRAVITY * tt * tt;
+          int ix = (int)roundf(fw.burst_x + dx);
+          int iy = (int)roundf(fw.burst_y + dy);
+          if (ix >= 0 && ix < w && iy >= 0 && iy < h) {
+            float br = brightness * (tr == 0 ? 1.f : tr == 1 ? 0.38f : 0.13f);
+            int hue = ((int)fw.base_hue + i * 14) % 360;
+            it.draw_pixel_at(ix, iy, hsv_to_rgb(hue, 1.f, br));
+          }
+        }
+      }
+    }
+
+    // ---- Secondary star-burst (8 fast diagonal sparks, delayed SEC_START ms) ----
+    if (post >= SEC_START && post < SEC_START + SEC_MS) {
+      float t2 = (float)(post - SEC_START) * 0.001f;
+      float b2 = 1.f - (float)(post - SEC_START) / (float)SEC_MS;
+      for (int i = 0; i < 8; i++) {
+        float a = (float)i * 45.f * PI_F / 180.f;
+        float spd = 22.f;
+        int ix = (int)roundf(fw.burst_x + cosf(a) * spd * t2);
+        int iy = (int)roundf(fw.burst_y - sinf(a) * spd * t2 + 0.5f * GRAVITY * t2 * t2);
+        if (ix >= 0 && ix < w && iy >= 0 && iy < h)
+          it.draw_pixel_at(ix, iy, hsv_to_rgb(((int)fw.base_hue + 60) % 360, 0.8f, b2));
+      }
+    }
   }
 }
 
@@ -2265,8 +2432,8 @@ Color LifeMatrix::get_marker_color_value(MarkerColor color) {
 void LifeMatrix::draw_marker(display::Display &it, int mark_y, int width, MarkerStyle style, Color color) {
   if (style == MARKER_SINGLE_DOT) {
     // Single dot on left and right edges
-    it.draw_pixel_at(0, mark_y, color);
-    it.draw_pixel_at(width - 1, mark_y, color);
+    draw_pixel(it, 0, mark_y, color);
+    draw_pixel(it, width - 1, mark_y, color);
   } else if (style == MARKER_GRADIENT_PEAK) {
     // 5 dots with gradient: 25%, 50%, 100%, 50%, 25%
     float intensities[] = {0.25f, 0.5f, 1.0f, 0.5f, 0.25f};
@@ -2278,8 +2445,8 @@ void LifeMatrix::draw_marker(display::Display &it, int mark_y, int width, Marker
         (uint8_t)(color.g * intensities[i]),
         (uint8_t)(color.b * intensities[i])
       );
-      it.draw_pixel_at(0, dot_y, faded_clr);
-      it.draw_pixel_at(width - 1, dot_y, faded_clr);
+      draw_pixel(it, 0, dot_y, faded_clr);
+      draw_pixel(it, width - 1, dot_y, faded_clr);
     }
   }
 }
@@ -2328,7 +2495,17 @@ void LifeMatrix::parse_year_events(const std::string &events_str) {
     }
   }
 
-  ESP_LOGD(TAG, "Parsed %d year events", (int)year_events_.size());
+  // Merge lifespan birthdays (kids, parents, siblings) so they appear in year/month views
+  // and trigger celebrations — re-added here so they survive user updates to year_events text
+  for (const auto &le : lifespan_year_events_) {
+    bool dup = false;
+    for (const auto &existing : year_events_) {
+      if (existing.month == le.month && existing.day == le.day) { dup = true; break; }
+    }
+    if (!dup && year_events_.size() < 48) year_events_.push_back(le);
+  }
+
+  ESP_LOGD(TAG, "Parsed %d year events (%d lifespan)", (int)year_events_.size(), (int)lifespan_year_events_.size());
 }
 
 int LifeMatrix::day_of_week_sakamoto(int y, int m, int d) {
@@ -2451,7 +2628,8 @@ void LifeMatrix::set_time_override(const std::string &time_str) {
   time_override_active_ = true;
   time_override_start_ms_ = millis();
   // Reset celebration tracking so new time is evaluated immediately
-  last_celebration_hour_ = 255;
+  last_celebration_hour_   = 255;
+  last_celebration_minute_ = 255;
   ESP_LOGI(TAG, "Time override set to: %04d-%02d-%02d %02d:%02d:%02d (DoW=%d, DoY=%d)",
            year, month, day, hour, minute, second, fake_time_.day_of_week, fake_time_.day_of_year);
 }
@@ -2460,6 +2638,580 @@ void LifeMatrix::clear_time_override() {
   if (time_override_active_) {
     time_override_active_ = false;
     ESP_LOGI(TAG, "Time override cleared - using real time");
+  }
+}
+
+// ============================================================================
+// LIFESPAN VIEW — PARSING HELPERS
+// ============================================================================
+
+LifeDate LifeMatrix::parse_life_date(const std::string &s) const {
+  LifeDate d;
+  // Accept "YYYY-MM-DD" or "YYYY/MM/DD"
+  if (s.size() >= 8) {
+    d.year  = (int16_t)std::atoi(s.substr(0, 4).c_str());
+    d.month = (uint8_t)std::atoi(s.substr(5, 2).c_str());
+    d.day   = (uint8_t)std::atoi(s.substr(8, 2).c_str());
+    if (d.month < 1 || d.month > 12) d.year = 0;  // invalid
+  }
+  return d;
+}
+
+LifeRange LifeMatrix::parse_life_range(const std::string &s) const {
+  LifeRange r;
+  // Trim whitespace
+  size_t first = s.find_first_not_of(" \t");
+  if (first == std::string::npos) return r;
+  std::string t = s.substr(first, s.find_last_not_of(" \t") - first + 1);
+  // Split on '/' that appears after the 4th char (skip date separators)
+  size_t slash = std::string::npos;
+  for (size_t i = 4; i < t.size(); i++) {
+    if (t[i] == '/') { slash = i; break; }
+  }
+  if (slash != std::string::npos) {
+    r.start = parse_life_date(t.substr(0, slash));
+    r.end   = parse_life_date(t.substr(slash + 1));
+  } else {
+    r.start = parse_life_date(t);
+  }
+  return r;
+}
+
+void LifeMatrix::parse_comma_dates(const std::string &s, std::vector<LifeDate> &out) const {
+  out.clear();
+  size_t pos = 0;
+  while (pos < s.size()) {
+    size_t comma = s.find(',', pos);
+    if (comma == std::string::npos) comma = s.size();
+    std::string tok = s.substr(pos, comma - pos);
+    LifeDate d = parse_life_date(tok);
+    if (d.is_set()) out.push_back(d);
+    pos = comma + 1;
+  }
+}
+
+void LifeMatrix::parse_comma_ranges(const std::string &s, std::vector<LifeRange> &out) const {
+  out.clear();
+  // Ranges are separated by comma; each range may itself contain a '/' (handled by parse_life_range)
+  // We split on commas, but must not split inside a range's slash.
+  // Since dates are "YYYY-MM-DD", the slash in a range appears as the 11th char of "YYYY-MM-DD/YYYY-MM-DD".
+  // Strategy: split on comma, then try parse_life_range on each token.
+  size_t pos = 0;
+  while (pos < s.size()) {
+    size_t comma = s.find(',', pos);
+    if (comma == std::string::npos) comma = s.size();
+    std::string tok = s.substr(pos, comma - pos);
+    LifeRange r = parse_life_range(tok);
+    if (r.is_set()) out.push_back(r);
+    pos = comma + 1;
+  }
+}
+
+int LifeMatrix::compute_doy(int year, int month, int day) const {
+  static const int days_before[] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+  int doy = days_before[month > 12 ? 0 : month - 1] + day - 1;
+  if (month > 2 && (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0))) doy++;
+  return doy;
+}
+
+// ============================================================================
+// LIFESPAN VIEW — SETTERS
+// ============================================================================
+
+void LifeMatrix::set_lifespan_birthday(const std::string &date) {
+  lifespan_config_.birthday = parse_life_date(date);
+  ESP_LOGD(TAG, "Lifespan birthday: %d-%02d-%02d", lifespan_config_.birthday.year,
+           lifespan_config_.birthday.month, lifespan_config_.birthday.day);
+}
+
+void LifeMatrix::set_lifespan_kids(const std::string &dates) {
+  parse_comma_dates(dates, lifespan_config_.kids);
+  // Sort kids by birth year
+  std::sort(lifespan_config_.kids.begin(), lifespan_config_.kids.end(),
+            [](const LifeDate &a, const LifeDate &b) { return a.year < b.year; });
+}
+
+void LifeMatrix::set_lifespan_parents(const std::string &ranges) {
+  lifespan_config_.parent_count = 0;
+  std::vector<LifeRange> tmp;
+  parse_comma_ranges(ranges, tmp);
+  for (size_t i = 0; i < tmp.size() && i < 2; i++) {
+    lifespan_config_.parents[i] = tmp[i];
+    lifespan_config_.parent_count++;
+  }
+}
+
+void LifeMatrix::set_lifespan_siblings(const std::string &dates) {
+  parse_comma_dates(dates, lifespan_config_.siblings);
+}
+
+void LifeMatrix::set_lifespan_partner_ranges(const std::string &ranges) {
+  parse_comma_ranges(ranges, lifespan_config_.partner_ranges);
+}
+
+void LifeMatrix::set_lifespan_marriage_ranges(const std::string &ranges) {
+  parse_comma_ranges(ranges, lifespan_config_.marriage_ranges);
+}
+
+void LifeMatrix::set_lifespan_milestones(const std::string &milestones_str) {
+  lifespan_config_.milestones.clear();
+  size_t pos = 0;
+  while (pos < milestones_str.size()) {
+    size_t comma = milestones_str.find(',', pos);
+    if (comma == std::string::npos) comma = milestones_str.size();
+    std::string tok = milestones_str.substr(pos, comma - pos);
+    // Trim
+    while (!tok.empty() && tok.front() == ' ') tok.erase(0, 1);
+    while (!tok.empty() && tok.back()  == ' ') tok.pop_back();
+    LifeMilestone m;
+    // Format: "YYYY-MM-DD:label" or just "YYYY-MM-DD"
+    // Find first ':' after position 9 (to skip date separators)
+    size_t colon = tok.find(':', 9);
+    if (colon != std::string::npos) {
+      m.date  = parse_life_date(tok.substr(0, colon));
+      m.label = tok.substr(colon + 1);
+    } else {
+      m.date = parse_life_date(tok);
+    }
+    if (m.date.is_set()) lifespan_config_.milestones.push_back(m);
+    pos = comma + 1;
+  }
+}
+
+// ============================================================================
+// LIFESPAN VIEW — BIRTHDAY EXTRACTION & PHASE PRECOMPUTATION
+// ============================================================================
+
+void LifeMatrix::apply_lifespan_year_events() {
+  lifespan_year_events_.clear();
+  if (!lifespan_config_.birthday.is_set()) return;
+
+  auto add_event = [&](uint8_t month, uint8_t day) {
+    if (month < 1 || month > 12 || day < 1 || day > 31) return;
+    // Deduplicate
+    for (const auto &e : lifespan_year_events_) {
+      if (e.month == month && e.day == day) return;
+    }
+    YearEvent evt;
+    evt.month = month;
+    evt.day   = day;
+    lifespan_year_events_.push_back(evt);
+  };
+
+  // Own birthday
+  add_event(lifespan_config_.birthday.month, lifespan_config_.birthday.day);
+
+  // Kids' birthdays
+  for (const auto &k : lifespan_config_.kids)
+    add_event(k.month, k.day);
+
+  // Parents' birthdays
+  for (int i = 0; i < lifespan_config_.parent_count; i++)
+    if (lifespan_config_.parents[i].start.is_set())
+      add_event(lifespan_config_.parents[i].start.month, lifespan_config_.parents[i].start.day);
+
+  // Siblings' birthdays
+  for (const auto &s : lifespan_config_.siblings)
+    add_event(s.month, s.day);
+
+  ESP_LOGD(TAG, "Lifespan year events: %d birthdays", (int)lifespan_year_events_.size());
+}
+
+// ============================================================================
+// LIFESPAN VIEW — PHASE LOGIC
+// ============================================================================
+
+uint16_t LifeMatrix::get_active_phases(int age, int row_year) const {
+  if (!lifespan_config_.birthday.is_set()) return 0;
+  uint16_t mask = 0;
+  int birth_year = lifespan_config_.birthday.year;
+
+  // PARENTS: birth → moved_out_age (inclusive)
+  if (lifespan_config_.moved_out_age > 0) {
+    if (age <= lifespan_config_.moved_out_age) mask |= (1 << PHASE_PARENTS);
+  }
+
+  // SCHOOL phases: always starts at age 6 (European: 8 primary, 4 highschool, rest university)
+  if (lifespan_config_.school_years_count > 0) {
+    const int ss    = 6;
+    const int se    = ss + lifespan_config_.school_years_count;
+    const int total = lifespan_config_.school_years_count;
+    const int primary_end    = ss + 8;
+    const int highschool_end = ss + 12;
+
+    if (age >= ss && age < primary_end)
+      mask |= (1 << PHASE_PRIMARY);
+    if (total > 8 && age >= primary_end && age < highschool_end)
+      mask |= (1 << PHASE_HIGHSCHOOL);
+    if (total > 12 && age >= highschool_end && age < se)
+      mask |= (1 << PHASE_UNIVERSITY);
+  }
+
+  // CAREER: max(school_end, moved_out_age) → retirement_age (or life expectancy)
+  {
+    int career_start = -1;
+    if (lifespan_config_.school_years_count > 0)
+      career_start = 6 + lifespan_config_.school_years_count;
+    if (lifespan_config_.moved_out_age > 0)
+      career_start = (career_start < 0) ? lifespan_config_.moved_out_age
+                                        : std::max(career_start, lifespan_config_.moved_out_age);
+    int career_end = (lifespan_config_.retirement_age > 0) ? lifespan_config_.retirement_age
+                                                           : lifespan_config_.life_expectancy_age;
+    if (career_start >= 0 && age >= career_start && age < career_end)
+      mask |= (1 << PHASE_CAREER);
+  }
+
+  // CHILDREN: first kid birth → last kid + 18
+  if (!lifespan_config_.kids.empty()) {
+    int first_age = lifespan_config_.kids.front().year - birth_year;
+    int last_age  = lifespan_config_.kids.back().year  - birth_year;
+    if (age >= first_age && age <= last_age + 18)
+      mask |= (1 << PHASE_CHILDREN);
+  }
+
+  // PARTNER ranges
+  for (const auto &r : lifespan_config_.partner_ranges) {
+    if (!r.is_set()) continue;
+    if (row_year >= r.start.year && (r.end.year == 0 || row_year <= r.end.year))
+      mask |= (1 << PHASE_PARTNER);
+  }
+
+  // MARRIAGE ranges
+  for (const auto &r : lifespan_config_.marriage_ranges) {
+    if (!r.is_set()) continue;
+    if (row_year >= r.start.year && (r.end.year == 0 || row_year <= r.end.year))
+      mask |= (1 << PHASE_MARRIED);
+  }
+
+  // RETIREMENT
+  if (lifespan_config_.retirement_age > 0 && age >= lifespan_config_.retirement_age)
+    mask |= (1 << PHASE_RETIREMENT);
+
+  return mask;
+}
+
+Color LifeMatrix::get_phase_color(int phase) const {
+  switch (phase) {
+    case PHASE_PARENTS:    return Color(255, 136,   0);  // amber
+    case PHASE_PRIMARY:    return Color(  0, 200, 200);  // cyan
+    case PHASE_HIGHSCHOOL: return Color(  0, 160, 100);  // teal
+    case PHASE_UNIVERSITY: return Color(  0,  80, 255);  // blue
+    case PHASE_CAREER:     return Color(  0, 200,  60);  // green
+    case PHASE_CHILDREN:   return Color(255, 200,   0);  // golden yellow
+    case PHASE_PARTNER:    return Color(255,  80, 160);  // rose
+    case PHASE_MARRIED:    return Color(180,   0, 100);  // deep magenta
+    case PHASE_RETIREMENT: return Color(140,  80, 255);  // lavender
+    default:               return Color( 80,  80,  80);  // grey
+  }
+}
+
+const char *LifeMatrix::get_phase_short_name(int phase) const {
+  switch (phase) {
+    case PHASE_PARENTS:    return "Home";
+    case PHASE_PRIMARY:    return "Prim";
+    case PHASE_HIGHSCHOOL: return "High";
+    case PHASE_UNIVERSITY: return "Uni";
+    case PHASE_CAREER:     return "Work";
+    case PHASE_CHILDREN:   return "Kids";
+    case PHASE_PARTNER:    return "Love";
+    case PHASE_MARRIED:    return "Wed";
+    case PHASE_RETIREMENT: return "Retir";
+    default:               return "";
+  }
+}
+
+Color LifeMatrix::blend_phase_colors(uint16_t phase_mask) const {
+  if (phase_mask == 0) return Color(50, 50, 50);  // no phase: dim neutral
+  int r = 0, g = 0, b = 0, count = 0;
+  for (int i = 0; i < PHASE_COUNT; i++) {
+    if (phase_mask & (1 << i)) {
+      Color c = get_phase_color(i);
+      r += c.r; g += c.g; b += c.b; count++;
+    }
+  }
+  return Color((uint8_t)(r / count), (uint8_t)(g / count), (uint8_t)(b / count));
+}
+
+void LifeMatrix::precompute_lifespan_phases() {
+  lifespan_active_phases_.clear();
+  if (!lifespan_config_.birthday.is_set()) return;
+  int birth_year = lifespan_config_.birthday.year;
+  int le_age = lifespan_config_.life_expectancy_age;
+  for (int phase = 0; phase < PHASE_COUNT; phase++) {
+    for (int age = 0; age <= le_age; age++) {
+      if (get_active_phases(age, birth_year + age) & (1 << phase)) {
+        lifespan_active_phases_.push_back(phase);
+        break;
+      }
+    }
+  }
+  ESP_LOGD(TAG, "Lifespan active phases: %d", (int)lifespan_active_phases_.size());
+}
+
+void LifeMatrix::update_lifespan_phase_cycle() {
+  if (lifespan_config_.phase_cycle_s < 0.1f || lifespan_active_phases_.empty()) {
+    lifespan_highlighted_phase_ = -1;
+    return;
+  }
+  uint32_t cycle_ms = (uint32_t)(lifespan_config_.phase_cycle_s * 1000.f);
+  uint32_t now = millis();
+
+  // Initialize on first call
+  if (lifespan_highlighted_phase_ == -1) {
+    lifespan_phase_idx_ = 0;
+    lifespan_highlighted_phase_ = lifespan_active_phases_[0];
+    lifespan_phase_changed_ms_ = now;
+    return;
+  }
+  if (now - lifespan_phase_changed_ms_ < cycle_ms) return;
+
+  lifespan_phase_idx_ = (lifespan_phase_idx_ + 1) % (uint8_t)lifespan_active_phases_.size();
+  lifespan_highlighted_phase_ = lifespan_active_phases_[lifespan_phase_idx_];
+  lifespan_phase_changed_ms_ = now;
+}
+
+// ============================================================================
+// LIFESPAN VIEW — RENDERING
+// ============================================================================
+
+void LifeMatrix::render_lifespan_view(display::Display &it, ESPTime &time, int viz_y, int viz_height) {
+  int width = it.get_width();  // 32
+
+  if (!lifespan_config_.birthday.is_set()) {
+    int cx = width / 2, cy = viz_y + viz_height / 2;
+    it.print(cx, cy - 9, font_small_, Color(80, 80, 80), display::TextAlign::CENTER, "Set");
+    it.print(cx, cy + 9, font_small_, Color(80, 80, 80), display::TextAlign::CENTER, "bday");
+    return;
+  }
+
+  int birth_year   = lifespan_config_.birthday.year;
+  int current_year = time.year;
+  int le_age       = lifespan_config_.life_expectancy_age;
+
+  // Current day-of-year (0-based) and days in current year
+  int doy = time.day_of_year - 1;
+  if (doy < 0) doy = 0;
+  bool is_leap = (current_year % 4 == 0 && (current_year % 100 != 0 || current_year % 400 == 0));
+  int days_in_year = is_leap ? 366 : 365;
+
+  // Update phase cycling
+  update_lifespan_phase_cycle();
+  int highlighted_phase = lifespan_highlighted_phase_;
+
+  int max_rows = std::min(viz_height, 120);
+
+  for (int age = 0; age < max_rows; age++) {
+    int row_year = birth_year + age;
+    int row_y    = viz_y + age;
+
+    bool is_past    = (row_year < current_year);
+    bool is_current = (row_year == current_year);
+    bool is_grave = (age >= le_age);
+
+    // ── MARKER COLUMN (x=0): decade ticks, life events ───────────────────────
+    if (!is_grave) {
+      // Determine highest-priority marker for this year
+      bool has_milestone = false;
+      for (const auto &m : lifespan_config_.milestones)
+        if (m.date.year == row_year) { has_milestone = true; break; }
+
+      bool has_event = false;
+      for (const auto &k : lifespan_config_.kids)
+        if (k.year == row_year) { has_event = true; break; }
+      if (!has_event)
+        for (int i = 0; i < lifespan_config_.parent_count; i++)
+          if (lifespan_config_.parents[i].end.year == row_year) { has_event = true; break; }
+      if (!has_event && lifespan_config_.moved_out_age > 0
+          && birth_year + lifespan_config_.moved_out_age == row_year)   has_event = true;
+      if (!has_event && lifespan_config_.retirement_age > 0
+          && birth_year + lifespan_config_.retirement_age == row_year)  has_event = true;
+      if (!has_event) {
+        for (const auto &r : lifespan_config_.marriage_ranges)
+          if (r.start.year == row_year) { has_event = true; break; }
+      }
+
+      bool is_decade = (age > 0 && age % 10 == 0);
+
+      if (is_decade && !has_milestone && !has_event) {
+        // Decade ticks: user marker color, kept very dim as structural orientation
+        Color dcl = get_marker_color_value(marker_color_);
+        uint8_t div = is_past ? 8 : (!is_current ? 16 : 4);
+        draw_pixel(it, 0, row_y, Color(dcl.r / div, dcl.g / div, dcl.b / div));
+      } else if (marker_style_ != MARKER_NONE && (has_milestone || has_event)) {
+        // Events and milestones: complementary of this row's phase color (like year view)
+        uint16_t phase_mask = get_active_phases(age, row_year);
+        Color comp = get_complementary_color(blend_phase_colors(phase_mask));
+        // Milestones at full brightness, life events at 60%
+        float scale = has_milestone ? 1.0f : 0.6f;
+        Color mc = Color((uint8_t)(comp.r * scale),
+                         (uint8_t)(comp.g * scale),
+                         (uint8_t)(comp.b * scale));
+        // Temporal dimming
+        if (is_past)          mc = Color(mc.r / 2, mc.g / 2, mc.b / 2);
+        else if (!is_current) mc = Color(mc.r / 4, mc.g / 4, mc.b / 4);
+
+        if (marker_style_ == MARKER_GRADIENT_PEAK) {
+          // Vertical gradient spread: full at marker row, 50% at ±1, 25% at ±2
+          float intensities[] = {0.25f, 0.5f, 1.0f, 0.5f, 0.25f};
+          for (int i = 0; i < 5; i++) {
+            int dot_y = row_y + (i - 2);
+            if (dot_y < viz_y || dot_y >= viz_y + viz_height) continue;
+            draw_pixel(it, 0, dot_y,
+              Color((uint8_t)(mc.r * intensities[i]),
+                    (uint8_t)(mc.g * intensities[i]),
+                    (uint8_t)(mc.b * intensities[i])));
+          }
+        } else {
+          draw_pixel(it, 0, row_y, mc);
+        }
+      } else {
+        draw_pixel(it, 0, row_y, Color(0, 0, 0));
+      }
+    }
+
+    // ── GRAVE: COSMOS / STARDUST ─────────────────────────────────────────────
+    if (is_grave) {
+      int grave_offset = age - le_age - 1;
+      float t = (float)millis() * 0.001f;
+      float depth = (float)grave_offset * 0.025f;  // 0.0 → ~1.0 over 40 rows
+      for (int x = 0; x < width; x++) {
+        // Good-distribution hash from (age, x) pair
+        uint32_t h = (uint32_t)age * 2654435761u ^ (uint32_t)x * 2246822519u;
+        h ^= h >> 15; h *= 0x45d9f3b7u; h ^= h >> 15;
+
+        uint8_t star_roll  = h & 0xFF;
+        uint8_t color_type = (h >> 8) & 0xFF;
+        float   phase      = (float)((h >> 16) & 0xFF) * (6.283f / 255.0f);
+        float   freq       = 0.4f + (float)((h >> 24) & 0x3F) * (1.2f / 63.0f);
+
+        if (star_roll > 210) {
+          // Star (~18% of pixels) — twinkles independently
+          float tw = 0.35f + 0.65f * (0.5f + 0.5f * sinf(t * freq * 6.283f + phase));
+          uint8_t br;
+          Color sc;
+          if (star_roll > 248) {
+            // Bright star (~3%): near-white, strong twinkle
+            br = (uint8_t)(tw * 255);
+            sc = Color(br, br, br);
+          } else if (color_type < 130) {
+            // White star (~51% of stars)
+            br = (uint8_t)(tw * 160);
+            sc = Color(br, br, br);
+          } else if (color_type < 205) {
+            // Blue-white star (~29% of stars)
+            br = (uint8_t)(tw * 140);
+            sc = Color((uint8_t)(br * 0.7f), (uint8_t)(br * 0.85f), br);
+          } else {
+            // Warm/amber star (~20% of stars)
+            br = (uint8_t)(tw * 140);
+            sc = Color(br, (uint8_t)(br * 0.85f), (uint8_t)(br * 0.5f));
+          }
+          draw_pixel(it, x, row_y, sc);
+        } else {
+          // Deep space background: near-black with faint nebula gradient
+          // Shifts from deep blue at LE line toward indigo deeper in
+          uint8_t nv = (h >> 12) & 0x07;             // 0-7 patch variation
+          uint8_t nb = (uint8_t)(2 + depth * 5 + nv * 0.4f);  // 2-10
+          uint8_t nr = (uint8_t)(depth * 2);          // 0-2 red tint at depth
+          draw_pixel(it, x, row_y, Color(nr, 0, nb));
+        }
+      }
+      continue;
+    }
+
+    // ── NORMAL LIFE ROW (x=1..31) ────────────────────────────────────────────
+    uint16_t phase_mask = get_active_phases(age, row_year);
+
+    Color base_color;
+    if (highlighted_phase >= 0) {
+      if (phase_mask & (1 << highlighted_phase))
+        base_color = get_phase_color(highlighted_phase);
+      else
+        base_color = Color(8, 8, 8);  // very dim when not in highlighted phase
+    } else {
+      base_color = blend_phase_colors(phase_mask);
+    }
+
+    // Present pixel x within current year (1–31)
+    int present_x = -1;
+    if (is_current) {
+      present_x = 1 + (int)((float)doy / (float)days_in_year * 30.0f + 0.5f);
+      if (present_x > 31) present_x = 31;
+    }
+
+    for (int x = 1; x < width; x++) {
+      Color c;
+      if (is_current && x == present_x) {
+        c = Color(255, 255, 255);  // present pixel: bright white
+      } else {
+        float brightness;
+        if (is_past) {
+          brightness = 0.50f;
+        } else if (!is_current) {
+          brightness = 0.25f;  // future year
+        } else {
+          brightness = (x < present_x) ? 0.50f : 0.25f;  // elapsed vs remaining
+        }
+        c = Color((uint8_t)(base_color.r * brightness),
+                  (uint8_t)(base_color.g * brightness),
+                  (uint8_t)(base_color.b * brightness));
+      }
+      draw_pixel(it, x, row_y, c);
+    }
+  }
+
+  // ── MILESTONE PIXELS overlaid at their exact day position ────────────────
+  for (const auto &m : lifespan_config_.milestones) {
+    if (!m.date.is_set()) continue;
+    int age = m.date.year - birth_year;
+    if (age < 0 || age >= max_rows || age > le_age) continue;
+    int doy_m = compute_doy(m.date.year, m.date.month, m.date.day);
+    bool leap_m = (m.date.year % 4 == 0 && (m.date.year % 100 != 0 || m.date.year % 400 == 0));
+    int x = 1 + (int)((float)doy_m / (float)(leap_m ? 366 : 365) * 30.0f + 0.5f);
+    if (x > 31) x = 31;
+    bool past = (m.date.year < current_year);
+    draw_pixel(it, x, viz_y + age, past ? Color(110, 110, 0) : Color(220, 220, 0));
+  }
+
+  // Kid birth markers (golden dot at birth day)
+  for (const auto &k : lifespan_config_.kids) {
+    if (!k.is_set()) continue;
+    int age = k.year - birth_year;
+    if (age < 0 || age >= max_rows || age > le_age) continue;
+    int doy_k = compute_doy(k.year, k.month, k.day);
+    bool leap_k = (k.year % 4 == 0 && (k.year % 100 != 0 || k.year % 400 == 0));
+    int x = 1 + (int)((float)doy_k / (float)(leap_k ? 366 : 365) * 30.0f + 0.5f);
+    if (x > 31) x = 31;
+    draw_pixel(it, x, viz_y + age,
+               (k.year < current_year) ? Color(128, 100, 0) : Color(255, 210, 0));
+  }
+
+  // ── TEXT AREA: time, phase name, or active milestone label ────────────────
+  if (text_area_position_ != "None" && font_small_) {
+    Viewport vp = calculate_viewport(it);
+    if (highlighted_phase >= 0 && lifespan_config_.phase_cycle_s > 0.1f) {
+      it.print(width / 2, vp.text_y, font_small_,
+               get_phase_color(highlighted_phase),
+               display::TextAlign::CENTER,
+               get_phase_short_name(highlighted_phase));
+    } else {
+      // Check for active milestone label in the current year
+      const char *label = nullptr;
+      for (const auto &m : lifespan_config_.milestones) {
+        if (m.date.year == current_year && !m.label.empty()) {
+          label = m.label.c_str(); break;
+        }
+      }
+      if (label) {
+        it.print(width / 2, vp.text_y, font_small_,
+                 Color(200, 200, 0), display::TextAlign::CENTER, label);
+      } else {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%02d:%02d", time.hour, time.minute);
+        it.print(width / 2, vp.text_y, font_small_,
+                 color_active_, display::TextAlign::CENTER, buf);
+      }
+    }
   }
 }
 

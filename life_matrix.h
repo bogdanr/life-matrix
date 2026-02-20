@@ -10,6 +10,7 @@
 #include "esphome/components/select/select.h"
 #include "esphome/components/switch/switch.h"
 #include "esphome/components/number/number.h"
+#include <algorithm>
 #include <array>
 #include <vector>
 #include <string>
@@ -36,7 +37,60 @@ enum ScreenID {
   SCREEN_DAY = 2,
   SCREEN_HOUR = 3,
   SCREEN_HABITS = 4,
-  SCREEN_GAME_OF_LIFE = 5
+  SCREEN_LIFESPAN = 5,
+  SCREEN_GAME_OF_LIFE = 6
+};
+
+// Life phases for the lifespan view
+enum LifePhase {
+  PHASE_PARENTS    = 0,
+  PHASE_PRIMARY    = 1,
+  PHASE_HIGHSCHOOL = 2,
+  PHASE_UNIVERSITY = 3,
+  PHASE_CAREER     = 4,
+  PHASE_CHILDREN   = 5,
+  PHASE_PARTNER    = 6,
+  PHASE_MARRIED    = 7,
+  PHASE_RETIREMENT = 8,
+  PHASE_COUNT      = 9
+};
+
+// A single point in time (year=0 means "not set")
+struct LifeDate {
+  int16_t year{0};
+  uint8_t month{1};
+  uint8_t day{1};
+  bool is_set() const { return year != 0; }
+};
+
+// A date range (end.year==0 means open/ongoing)
+struct LifeRange {
+  LifeDate start;
+  LifeDate end;
+  bool is_set() const { return start.is_set(); }
+};
+
+// A named life milestone
+struct LifeMilestone {
+  LifeDate date;
+  std::string label;
+};
+
+// Full biographical config for the lifespan view
+struct LifespanConfig {
+  LifeDate birthday;           // required anchor
+  int moved_out_age{0};        // age when left parents' home (0 = not set)
+  int school_years_count{0};   // total years in school, starts at age 6 (0 = not set)
+  int retirement_age{0};       // age at retirement (0 = not set)
+  int life_expectancy_age{90};
+  float phase_cycle_s{3.0f};   // 0 = disabled
+  LifeRange parents[2];
+  int parent_count{0};
+  std::vector<LifeDate> kids;
+  std::vector<LifeDate> siblings;
+  std::vector<LifeRange> partner_ranges;
+  std::vector<LifeRange> marriage_ranges;
+  std::vector<LifeMilestone> milestones;
 };
 
 // Display styles (how fill-bar views are colored)
@@ -90,8 +144,16 @@ enum YearEventStyle {
 
 // Celebration animation styles
 enum CelebrationStyle {
-  CELEB_SPARKLE = 0,
-  CELEB_PLASMA  = 1
+  CELEB_SPARKLE   = 0,
+  CELEB_PLASMA    = 1,
+  CELEB_FIREWORKS = 2,  // staggered particle rockets + explosions (off by default)
+  CELEB_HUE_CYCLE = 3   // full 360° hue rotation of the current display
+};
+
+// Per-frame color transform applied in draw_pixel()
+enum ColorTransformMode {
+  CTM_NONE      = 0,
+  CTM_HUE_SHIFT = 1  // rotate all pixel hues using precomputed circulant matrix
 };
 
 // Event storage structure
@@ -177,6 +239,21 @@ class LifeMatrix : public Component {
   void set_day_fill(const std::string &style);
   void set_year_event_style(YearEventStyle style) { year_event_style_ = style; }
   void set_year_event_style(const std::string &style);
+
+  // Lifespan view configuration (all YAML-only, biographical data)
+  void set_lifespan_birthday(const std::string &date);
+  void set_lifespan_moved_out_age(int age) { lifespan_config_.moved_out_age = age; }
+  void set_lifespan_school_years(int years) { lifespan_config_.school_years_count = years; }
+  void set_lifespan_kids(const std::string &dates);
+  void set_lifespan_parents(const std::string &ranges);
+  void set_lifespan_siblings(const std::string &dates);
+  void set_lifespan_partner_ranges(const std::string &ranges);
+  void set_lifespan_marriage_ranges(const std::string &ranges);
+  void set_lifespan_milestones(const std::string &milestones_str);
+  void set_lifespan_retirement_age(int age) { lifespan_config_.retirement_age = age; }
+  void set_lifespan_life_expectancy(int age) { lifespan_config_.life_expectancy_age = age; }
+  void set_lifespan_phase_cycle(float seconds) { lifespan_config_.phase_cycle_s = seconds; }
+  void refresh_lifespan() { apply_lifespan_year_events(); precompute_lifespan_phases(); }
 
   // Screen management
   void register_screen(int screen_id, bool enabled);
@@ -306,12 +383,31 @@ class LifeMatrix : public Component {
   void render_day_view(display::Display &it, ESPTime &time, int viz_y, int viz_height);
   void render_hour_view(display::Display &it, ESPTime &time, int viz_y, int viz_height);
   void render_game_of_life(display::Display &it, int viz_y, int viz_height);
+  void render_lifespan_view(display::Display &it, ESPTime &time, int viz_y, int viz_height);
+
+  // Lifespan helpers
+  void apply_lifespan_year_events();
+  void precompute_lifespan_phases();
+  void update_lifespan_phase_cycle();
+  uint16_t get_active_phases(int age, int row_year) const;
+  Color blend_phase_colors(uint16_t phase_mask) const;
+  Color get_phase_color(int phase) const;
+  const char *get_phase_short_name(int phase) const;
+  LifeDate parse_life_date(const std::string &s) const;
+  LifeRange parse_life_range(const std::string &s) const;
+  void parse_comma_dates(const std::string &s, std::vector<LifeDate> &out) const;
+  void parse_comma_ranges(const std::string &s, std::vector<LifeRange> &out) const;
+  int compute_doy(int year, int month, int day) const;
   void render_big_bang_animation(display::Display &it, int viz_y, int viz_height);
   void render_ui_overlays(display::Display &it);
   void check_celebration(ESPTime &time);
   void render_celebration_overlay(display::Display &it, uint32_t elapsed_ms);
   void render_sparkle_celebration(display::Display &it, uint32_t elapsed_ms);
   void render_plasma_celebration(display::Display &it, uint32_t elapsed_ms);
+  void render_fireworks_celebration(display::Display &it, uint32_t elapsed_ms);
+  uint32_t get_celeb_duration(CelebrationStyle style);
+  // draw_pixel: routes main-display pixels through the active per-frame color transform (CTM_HUE_SHIFT)
+  void draw_pixel(display::Display &it, int x, int y, Color c);
   Color get_complementary_color(Color c);
   Color hsv_to_rgb(int hue, float saturation, float value);
   Color get_gradient_color(float progress);
@@ -366,9 +462,24 @@ class LifeMatrix : public Component {
   bool celebration_active_{false};
   uint32_t celebration_start_{0};
   uint8_t last_celebration_hour_{255};   // 255 = never fired
+  uint8_t last_celebration_minute_{255};
   uint8_t last_celebration_day_{0};
   uint8_t last_celebration_month_{0};
-  CelebrationStyle celebration_style_{CELEB_PLASMA};
+  // Sequence: up to 4 styles played one after another
+  CelebrationStyle celeb_sequence_[4]{CELEB_HUE_CYCLE, CELEB_SPARKLE, CELEB_SPARKLE, CELEB_SPARKLE};
+  uint8_t celeb_seq_len_{1};   // number of active entries in celeb_sequence_
+  uint8_t celeb_seq_idx_{0};   // current phase index
+  // Per-frame color transform (CTM_HUE_SHIFT): circulant matrix precomputed once per frame in render()
+  ColorTransformMode ctm_{CTM_NONE};
+  float hue_mat_a_{1.f}, hue_mat_b_{0.f}, hue_mat_c_{0.f};  // identity by default
+
+  // Lifespan view state
+  LifespanConfig lifespan_config_{};
+  std::vector<YearEvent> lifespan_year_events_;   // birthdays extracted from lifespan config
+  std::vector<int> lifespan_active_phases_;        // phases that have active years (for cycling)
+  int  lifespan_highlighted_phase_{-1};            // -1 = no highlight
+  uint8_t lifespan_phase_idx_{0};                  // index into lifespan_active_phases_
+  uint32_t lifespan_phase_changed_ms_{0};
 
   // OTA state
   bool ota_in_progress_{false};
