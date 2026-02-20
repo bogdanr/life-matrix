@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-02-20
+
+First stable release. All five screens fully implemented and rendering, physical UI (encoders + buttons) functional, Home Assistant entity sync complete, and Game of Life running only when visible. Tested on Adafruit Matrix Portal S3.
+
 ## [1.0.0-beta.3] - 2026-02-17
 
 ### Fixed
@@ -57,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Code reduction: 92.7% (2394 → 175 lines of user YAML)
 - Component size: ~1520 lines C++, 306 lines header, 140 lines Python schema
 
-## [1.0.0] - 2026-02-16
+## [1.0.0-beta.1] - 2026-02-16
 
 ### Added
 
@@ -220,7 +224,8 @@ N/A - Initial release
 
 ## Version History
 
-- **v1.0.0** (2026-02-16): Initial component extraction and release
+- **v1.0.0** (2026-02-20): First stable release
+- **v1.0.0-beta.1–beta.3** (2026-02-16–17): Initial component extraction and stabilization
 - **v0.x.x** (2025-2026): Monolithic YAML implementation (pre-component)
 
 ---
@@ -265,4 +270,4 @@ See README.md for contribution guidelines.
 
 ## License
 
-MIT License - See LICENSE file for details.
+GPLv3 — See LICENSE file for details.
