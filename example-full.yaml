@@ -1,0 +1,791 @@
+# Life Matrix - Full Example
+# Complete configuration with all options, Home Assistant integration,
+# physical UI (2 rotary encoders + buttons), OTA progress, and status LEDs.
+# Tested on Adafruit Matrix Portal S3 with 2x 64x32 HUB75 panels (rotated 90°).
+#
+# For a minimal setup see example-minimal.yaml.
+# monobit.ttf is included in the repository — copy it to your ESPHome config dir.
+
+substitutions:
+  devicename: life-matrix
+
+esphome:
+  name: ${devicename}
+  on_boot:
+    - priority: 600  # Early — before switches restore
+      then:
+        - light.turn_on:
+            id: status_led
+            effect: none
+            red: 0%
+            green: 100%
+            blue: 0%
+    - priority: -100  # Late — after switches restore
+      then:
+        - delay: 100ms
+        - lambda: |-
+            // Re-sync screens with HA switch states after restore
+            id(life_matrix_component)->register_screen(0, id(show_year).state);
+            id(life_matrix_component)->register_screen(1, id(show_month).state);
+            id(life_matrix_component)->register_screen(2, id(show_day).state);
+            id(life_matrix_component)->register_screen(3, id(show_hour).state);
+            id(life_matrix_component)->register_screen(5, id(show_conway).state);
+
+            // Register HA entities for bidirectional sync (physical UI → HA)
+            id(life_matrix_component)->set_ha_complex_patterns(id(gol_complex_patterns));
+            id(life_matrix_component)->set_ha_conway_speed(id(conway_speed));
+            id(life_matrix_component)->set_ha_color_scheme(id(color_scheme));
+            id(life_matrix_component)->set_ha_gradient_type(id(gradient_type));
+            id(life_matrix_component)->set_ha_fill_direction(id(fill_direction));
+            id(life_matrix_component)->set_ha_marker_style(id(marker_style));
+            id(life_matrix_component)->set_ha_marker_color(id(marker_color));
+            id(life_matrix_component)->set_ha_text_area_position(id(text_area_position));
+            id(life_matrix_component)->set_ha_year_day_style(id(year_day_style));
+            id(life_matrix_component)->set_ha_year_event_style(id(year_event_style));
+            id(life_matrix_component)->set_ha_bed_time_hour(id(bed_time_hour));
+            id(life_matrix_component)->set_ha_work_start_hour(id(work_start_hour));
+            id(life_matrix_component)->set_ha_work_end_hour(id(work_end_hour));
+            id(life_matrix_component)->set_ha_cycle_time(id(cycle_time_s));
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://bogdanr/life-matrix
+    components: [ life_matrix ]
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+logger:
+api:
+ota:
+  - platform: esphome
+    on_begin:
+      - lambda: id(life_matrix_component)->set_ota_in_progress(true);
+      - light.turn_on:
+          id: status_led
+          red: 100%
+          green: 50%
+          blue: 0%
+          effect: "Slow Pulse"
+    on_progress:
+      - lambda: |-
+          id(life_matrix_component)->set_ota_progress(x);
+          float g = x / 100.0f;
+          auto call = id(status_led).turn_on();
+          call.set_rgb(1.0f - g, 0.5f + g * 0.5f, 0.0f);
+          call.set_effect("none");
+          call.perform();
+    on_end:
+      - light.turn_on:
+          id: status_led
+          effect: none
+          red: 0%
+          green: 100%
+          blue: 0%
+    on_error:
+      - light.turn_on:
+          id: status_led
+          red: 100%
+          green: 0%
+          blue: 0%
+          effect: "Slow Pulse"
+      - lambda: id(life_matrix_component)->set_ota_in_progress(false);
+
+debug:
+  update_interval: 5s
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: America/New_York
+
+font:
+  - file: "monobit.ttf"
+    id: font_sm
+    size: 16
+    glyphs: >-
+      !"%()+*=,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz@
+
+color:
+  - id: c_active
+    hex: "FFFFFF"
+  - id: c_weekend
+    hex: "FF0000"
+  - id: c_marker
+    hex: "0066FF"
+  - id: c_highlight
+    hex: "FFFF00"
+
+# -------------------------------------------------------------------------
+# SCREEN ENABLE/DISABLE SWITCHES
+# Using HA switches (instead of the YAML screens: block) so each screen's
+# enabled state persists across reboots via restore_mode.
+# -------------------------------------------------------------------------
+switch:
+  - platform: template
+    name: "Show Year View"
+    id: show_year
+    icon: "mdi:calendar"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - lambda: id(life_matrix_component)->register_screen(0, true);
+    on_turn_off:
+      - lambda: id(life_matrix_component)->register_screen(0, false);
+
+  - platform: template
+    name: "Show Month View"
+    id: show_month
+    icon: "mdi:calendar-month"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - lambda: id(life_matrix_component)->register_screen(1, true);
+    on_turn_off:
+      - lambda: id(life_matrix_component)->register_screen(1, false);
+
+  - platform: template
+    name: "Show Day View"
+    id: show_day
+    icon: "mdi:calendar-today"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - lambda: id(life_matrix_component)->register_screen(2, true);
+    on_turn_off:
+      - lambda: id(life_matrix_component)->register_screen(2, false);
+
+  - platform: template
+    name: "Show Hour View"
+    id: show_hour
+    icon: "mdi:clock-outline"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - lambda: id(life_matrix_component)->register_screen(3, true);
+    on_turn_off:
+      - lambda: id(life_matrix_component)->register_screen(3, false);
+
+  - platform: template
+    name: "Show Game of Life"
+    id: show_conway
+    icon: "mdi:grid"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - lambda: id(life_matrix_component)->register_screen(5, true);
+    on_turn_off:
+      - lambda: id(life_matrix_component)->register_screen(5, false);
+
+  - platform: template
+    name: "Complex Patterns"
+    id: gol_complex_patterns
+    icon: "mdi:puzzle"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: |-
+          auto config = id(life_matrix_component)->get_game_config();
+          config.complex_patterns = true;
+          id(life_matrix_component)->set_game_config(config);
+    on_turn_off:
+      - lambda: |-
+          auto config = id(life_matrix_component)->get_game_config();
+          config.complex_patterns = false;
+          id(life_matrix_component)->set_game_config(config);
+
+# -------------------------------------------------------------------------
+# TEXT INPUTS
+# -------------------------------------------------------------------------
+text:
+  - platform: template
+    name: "Year Events"
+    id: year_events
+    icon: "mdi:calendar-star"
+    entity_category: config
+    optimistic: true
+    mode: text
+    initial_value: ""
+    on_value:
+      - lambda: id(life_matrix_component)->set_year_events(x);
+
+  - platform: template
+    name: "Time Override (Testing)"
+    id: time_override
+    icon: "mdi:clock-edit-outline"
+    entity_category: config
+    optimistic: true
+    mode: text
+    initial_value: ""
+    on_value:
+      - lambda: |-
+          if (x.empty() || x == "clear" || x == "off") {
+            id(life_matrix_component)->clear_time_override();
+          } else {
+            id(life_matrix_component)->set_time_override(x);
+          }
+
+# -------------------------------------------------------------------------
+# SELECTS
+# -------------------------------------------------------------------------
+select:
+  - platform: template
+    name: "Color Scheme"
+    id: color_scheme
+    icon: "mdi:palette"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - "Single Color"
+      - "Gradient"
+      - "Time Segments"
+      - "Rainbow"
+    initial_option: "Time Segments"
+    on_value:
+      - lambda: id(life_matrix_component)->set_color_scheme(x);
+
+  - platform: template
+    name: "Gradient Type"
+    id: gradient_type
+    icon: "mdi:gradient-vertical"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - "Red-Blue"
+      - "Green-Yellow"
+      - "Cyan-Magenta"
+      - "Purple-Orange"
+      - "Blue-Yellow"
+    initial_option: "Red-Blue"
+    on_value:
+      - lambda: id(life_matrix_component)->set_gradient_type(x);
+
+  - platform: template
+    name: "Fill Direction"
+    id: fill_direction
+    icon: "mdi:arrow-up-down"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - "Bottom to Top"
+      - "Top to Bottom"
+    initial_option: "Bottom to Top"
+    on_value:
+      - lambda: id(life_matrix_component)->set_fill_direction(x);
+
+  - platform: template
+    name: "Marker Style"
+    id: marker_style
+    icon: "mdi:marker"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - "None"
+      - "Single Dot"
+      - "Gradient Peak"
+    initial_option: "Single Dot"
+    on_value:
+      - lambda: id(life_matrix_component)->set_marker_style(x);
+
+  - platform: template
+    name: "Marker Color"
+    id: marker_color
+    icon: "mdi:palette"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - "Blue"
+      - "White"
+      - "Yellow"
+      - "Red"
+      - "Green"
+      - "Cyan"
+      - "Magenta"
+    initial_option: "Blue"
+    on_value:
+      - lambda: id(life_matrix_component)->set_marker_color(x);
+
+  - platform: template
+    name: "Text Area Position"
+    id: text_area_position
+    icon: "mdi:format-align-top"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - "Top"
+      - "Bottom"
+      - "None"
+    initial_option: "Top"
+    on_value:
+      - lambda: id(life_matrix_component)->set_text_area_position(x);
+
+  - platform: template
+    name: "Year Day Style"
+    id: year_day_style
+    icon: "mdi:calendar-blank"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - "Activity"
+      - "Scheme"
+      - "Activity + Scheme"
+    initial_option: "Activity + Scheme"
+    on_value:
+      - lambda: id(life_matrix_component)->set_year_day_style(x);
+
+  - platform: template
+    name: "Year Event Style"
+    id: year_event_style
+    icon: "mdi:calendar-star"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - "None"
+      - "Pulse"
+      - "Markers"
+    initial_option: "Markers"
+    on_value:
+      - lambda: id(life_matrix_component)->set_year_event_style(x);
+
+  - platform: template
+    name: "Conway Speed"
+    id: conway_speed
+    icon: "mdi:speedometer"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options:
+      - "Fast (50ms)"
+      - "Normal (200ms)"
+      - "Slow (1000ms)"
+    initial_option: "Normal (200ms)"
+    on_value:
+      - lambda: |-
+          int speed = 200;
+          if (x == "Fast (50ms)") speed = 50;
+          else if (x == "Normal (200ms)") speed = 200;
+          else if (x == "Slow (1000ms)") speed = 1000;
+          id(life_matrix_component)->set_game_update_interval(speed);
+
+# -------------------------------------------------------------------------
+# NUMBERS
+# -------------------------------------------------------------------------
+number:
+  - platform: template
+    name: "Bed Time Hour"
+    id: bed_time_hour
+    icon: "mdi:bed"
+    entity_category: config
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 22
+    unit_of_measurement: "h"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          auto config = id(life_matrix_component)->get_time_segments();
+          config.bed_time_hour = (int)x;
+          id(life_matrix_component)->set_time_segments(config);
+
+  - platform: template
+    name: "Work Start Hour"
+    id: work_start_hour
+    icon: "mdi:briefcase"
+    entity_category: config
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 9
+    unit_of_measurement: "h"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          auto config = id(life_matrix_component)->get_time_segments();
+          config.work_start_hour = (int)x;
+          id(life_matrix_component)->set_time_segments(config);
+
+  - platform: template
+    name: "Work End Hour"
+    id: work_end_hour
+    icon: "mdi:briefcase-clock"
+    entity_category: config
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 17
+    unit_of_measurement: "h"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          auto config = id(life_matrix_component)->get_time_segments();
+          config.work_end_hour = (int)x;
+          id(life_matrix_component)->set_time_segments(config);
+
+  - platform: template
+    name: "Screen Cycle Time"
+    id: cycle_time_s
+    icon: "mdi:timer"
+    entity_category: config
+    min_value: 1
+    max_value: 60
+    step: 1
+    initial_value: 5
+    unit_of_measurement: "s"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: id(life_matrix_component)->set_screen_cycle_time(x);
+
+  - platform: template
+    name: "Brightness"
+    id: display_brightness
+    icon: "mdi:brightness-6"
+    entity_category: config
+    min_value: 1
+    max_value: 100
+    step: 1
+    initial_value: 20
+    unit_of_measurement: "%"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          int brightness = (int)(x * 2.55);
+          id(matrix_display).set_brightness(brightness);
+
+# -------------------------------------------------------------------------
+# SENSORS
+# -------------------------------------------------------------------------
+sensor:
+  - platform: debug
+    free:
+      name: "Heap Free"
+      icon: "mdi:memory"
+      entity_category: diagnostic
+    loop_time:
+      name: "Loop Time"
+      icon: "mdi:timer-cog"
+      entity_category: diagnostic
+
+  - platform: template
+    name: "GoL Final Generation"
+    id: gol_final_generation
+    icon: "mdi:counter"
+    accuracy_decimals: 0
+    unit_of_measurement: "gen"
+    state_class: measurement
+
+  - platform: template
+    name: "GoL Final Population"
+    id: gol_final_population
+    icon: "mdi:account-group"
+    accuracy_decimals: 0
+    unit_of_measurement: "cells"
+    state_class: measurement
+
+  # Navigation encoder — browse screens or navigate the settings menu
+  - platform: rotary_encoder
+    id: enc1
+    name: "Nav Encoder"
+    pin_a:
+      number: GPIO10
+      mode: INPUT_PULLUP
+    pin_b:
+      number: GPIO11
+      mode: INPUT_PULLUP
+    on_clockwise:
+      - lambda: |-
+          if (id(life_matrix_component)->get_ui_mode() == life_matrix::SETTINGS) {
+            id(life_matrix_component)->next_settings_cursor();
+          } else {
+            id(life_matrix_component)->set_ui_mode(life_matrix::MANUAL_BROWSE);
+            id(life_matrix_component)->next_screen();
+          }
+    on_anticlockwise:
+      - lambda: |-
+          if (id(life_matrix_component)->get_ui_mode() == life_matrix::SETTINGS) {
+            id(life_matrix_component)->prev_settings_cursor();
+          } else {
+            id(life_matrix_component)->set_ui_mode(life_matrix::MANUAL_BROWSE);
+            id(life_matrix_component)->prev_screen();
+          }
+
+  # Value encoder — adjust brightness or current setting
+  - platform: rotary_encoder
+    id: enc2
+    name: "Value Encoder"
+    pin_a:
+      number: GPIO3
+      mode: INPUT_PULLUP
+    pin_b:
+      number: GPIO18
+      mode: INPUT_PULLUP
+    on_clockwise:
+      - lambda: |-
+          if (id(life_matrix_component)->get_ui_mode() == life_matrix::SETTINGS) {
+            int cursor = id(life_matrix_component)->get_settings_cursor();
+            if (cursor == 0) {
+              auto call = id(display_brightness).make_call();
+              call.set_value(id(display_brightness).state + 5);
+              call.perform();
+            } else {
+              id(life_matrix_component)->adjust_setting(+1);
+            }
+          } else {
+            auto call = id(display_brightness).make_call();
+            call.set_value(id(display_brightness).state + 5);
+            call.perform();
+          }
+    on_anticlockwise:
+      - lambda: |-
+          if (id(life_matrix_component)->get_ui_mode() == life_matrix::SETTINGS) {
+            int cursor = id(life_matrix_component)->get_settings_cursor();
+            if (cursor == 0) {
+              auto call = id(display_brightness).make_call();
+              call.set_value(id(display_brightness).state - 5);
+              call.perform();
+            } else {
+              id(life_matrix_component)->adjust_setting(-1);
+            }
+          } else {
+            auto call = id(display_brightness).make_call();
+            call.set_value(id(display_brightness).state - 5);
+            call.perform();
+          }
+
+# -------------------------------------------------------------------------
+# BUTTONS
+# -------------------------------------------------------------------------
+binary_sensor:
+  # Nav encoder button — toggle settings mode
+  - platform: gpio
+    id: enc1_sw
+    name: "Nav Encoder Button"
+    pin:
+      number: GPIO8
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      - delayed_on: 10ms
+    on_press:
+      - lambda: |-
+          auto mode = id(life_matrix_component)->get_ui_mode();
+          if (mode == life_matrix::SETTINGS) {
+            id(life_matrix_component)->set_ui_mode(life_matrix::AUTO_CYCLE);
+          } else {
+            id(life_matrix_component)->set_ui_mode(life_matrix::SETTINGS);
+          }
+      - light.turn_on: red_led
+      - delay: 100ms
+      - light.turn_off: red_led
+
+  # Value encoder button — pause/resume
+  - platform: gpio
+    id: enc2_sw
+    name: "Pause Button"
+    pin:
+      number: GPIO9
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      - delayed_on: 10ms
+    on_press:
+      - lambda: id(life_matrix_component)->toggle_pause();
+      - light.turn_on: red_led
+      - delay: 100ms
+      - light.turn_off: red_led
+
+  # Button UP — pause/resume
+  - platform: gpio
+    id: button_up
+    name: "Button UP"
+    pin:
+      number: GPIO6
+      mode: INPUT_PULLUP
+    on_press:
+      - lambda: id(life_matrix_component)->toggle_pause();
+      - light.turn_on: red_led
+      - delay: 100ms
+      - light.turn_off: red_led
+
+  # Button DOWN — reset Game of Life (only when GoL screen is active)
+  - platform: gpio
+    id: button_down
+    name: "Button DOWN"
+    pin:
+      number: GPIO7
+      mode: INPUT_PULLUP
+    on_press:
+      - lambda: |-
+          if (id(life_matrix_component)->get_current_screen_id() == 5) {
+            id(life_matrix_component)->reset_game_of_life();
+          }
+      - light.turn_on: red_led
+      - delay: 100ms
+      - light.turn_off: red_led
+
+# -------------------------------------------------------------------------
+# STATUS LEDS
+# -------------------------------------------------------------------------
+light:
+  - platform: esp32_rmt_led_strip
+    id: status_led
+    name: "Status LED"
+    pin: GPIO4
+    num_leds: 1
+    rgb_order: GRB
+    chipset: WS2812
+    effects:
+      - pulse:
+          name: "Slow Pulse"
+          transition_length: 1s
+          update_interval: 1s
+
+  - platform: binary
+    id: red_led
+    name: "Red LED"
+    output: red_led_output
+
+output:
+  - platform: gpio
+    id: red_led_output
+    pin: GPIO13
+
+# -------------------------------------------------------------------------
+# DISPLAY
+# -------------------------------------------------------------------------
+display:
+  - platform: hub75
+    id: matrix_display
+    board: adafruit-matrix-portal-s3
+    panel_width: 64
+    panel_height: 32
+    layout_cols: 2
+    layout: HORIZONTAL
+    double_buffer: true
+    update_interval: 50ms
+    rotation: 90
+    lambda: |-
+      // OTA in progress — show progress bar
+      if (id(life_matrix_component)->is_ota_in_progress()) {
+        it.fill(Color::BLACK);
+        int cx = it.get_width() / 2;
+        int cy = it.get_height() / 2;
+        it.print(cx, cy - 12, id(font_sm), Color(255, 180, 0), TextAlign::CENTER, "OTA");
+        float pct = id(life_matrix_component)->get_ota_progress();
+        int bar_w = it.get_width() - 4;
+        int filled = (int)(pct * bar_w / 100.0f);
+        it.rectangle(1, cy, bar_w + 2, 7, Color(100, 100, 100));
+        if (filled > 0) {
+          it.filled_rectangle(2, cy + 1, filled, 5, Color(0, 255, 0));
+        }
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%.0f%%", pct);
+        it.print(cx, cy + 12, id(font_sm), id(c_active), TextAlign::CENTER, buf);
+        return;
+      }
+
+      // Waiting for time sync — show animated status
+      auto time = id(sntp_time).now();
+      if (!time.is_valid()) {
+        int cx = it.get_width() / 2;
+        int cy = it.get_height() / 2;
+        int dot_count = (millis() / 500) % 4;
+        std::string dots = "";
+        for (int i = 0; i < dot_count; i++) dots += ".";
+        if (!wifi::global_wifi_component->is_connected()) {
+          it.print(cx, cy - 10, id(font_sm), Color(255, 150, 0), TextAlign::CENTER, "WiFi");
+          it.print(cx, cy + 6, id(font_sm), Color(255, 150, 0), TextAlign::CENTER, dots.c_str());
+        } else {
+          it.print(cx, cy - 10, id(font_sm), Color(0, 200, 255), TextAlign::CENTER, "Time");
+          it.print(cx, cy + 6, id(font_sm), Color(0, 200, 255), TextAlign::CENTER, dots.c_str());
+        }
+        return;
+      }
+
+      // Normal rendering
+      id(life_matrix_component)->render(it, time);
+
+      // Settings overlay — drawn on top of current screen
+      if (id(life_matrix_component)->get_ui_mode() == life_matrix::SETTINGS) {
+        int bar_h = 32;
+        int bar_y = it.get_height() - bar_h;
+        it.filled_rectangle(0, bar_y, it.get_width(), bar_h, Color(0, 0, 0));
+        it.horizontal_line(0, bar_y, it.get_width(), Color(180, 180, 0));
+
+        int cursor = id(life_matrix_component)->get_settings_cursor();
+        std::string s_name = id(life_matrix_component)->get_current_setting_name();
+        std::string s_val = id(life_matrix_component)->get_current_setting_value();
+
+        // Brightness and cycle time are stored in HA entities
+        if (cursor == 0) {
+          char buf[8];
+          snprintf(buf, sizeof(buf), "%.0f%%", id(display_brightness).state);
+          s_val = buf;
+        } else if (cursor == 1) {
+          char buf[8];
+          snprintf(buf, sizeof(buf), "%.0fs", id(cycle_time_s).state);
+          s_val = buf;
+        }
+
+        it.print(2, bar_y + 4, id(font_sm), Color(180, 180, 0), s_name.c_str());
+        it.print(2, bar_y + 18, id(font_sm), Color(200, 200, 200), s_val.c_str());
+      }
+
+# -------------------------------------------------------------------------
+# LIFE MATRIX COMPONENT
+# -------------------------------------------------------------------------
+life_matrix:
+  id: life_matrix_component
+  time_id: sntp_time
+  status_led: status_led
+  font_small: font_sm
+  gol_final_generation_sensor: gol_final_generation
+  gol_final_population_sensor: gol_final_population
+
+  grid_width: 32
+  grid_height: 120
+  screen_cycle_time: 5s
+
+  # Screens are controlled via HA switches above, not here.
+  # This allows per-screen enabled state to persist across reboots.
+
+  game_of_life:
+    update_interval: 200ms
+    complex_patterns: false
+    auto_reset_on_stable: true
+    stability_timeout: 60s
+    demo_mode: false
+
+  time_segments:
+    bed_time_hour: 22
+    work_start_hour: 9
+    work_end_hour: 17
+
+  color_scheme: "Time Segments"
+  gradient_type: "Red-Blue"
+  text_area_position: "Top"
+  fill_direction: "Bottom to Top"

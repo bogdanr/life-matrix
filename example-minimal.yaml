@@ -33,6 +33,8 @@ time:
     timezone: America/New_York
 
 font:
+  # monobit.ttf is included in the Life Matrix repository.
+  # Copy it from: https://github.com/bogdanr/life-matrix/raw/main/monobit.ttf
   - file: "monobit.ttf"
     id: font_sm
     size: 16

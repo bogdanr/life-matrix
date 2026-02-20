@@ -33,7 +33,7 @@ Copy the `life_matrix` folder to `esphome/components/` in your ESPHome config di
 
 ## Quick Start
 
-See [`example-minimal.yaml`](example-minimal.yaml) for a working configuration. The essentials:
+See [`example-minimal.yaml`](example-minimal.yaml) for a basic setup or [`example-full.yaml`](example-full.yaml) for a complete configuration with HA integration and physical UI. The essentials:
 
 ```yaml
 life_matrix:
@@ -105,10 +105,11 @@ life_matrix:
 
 The component exposes entities for full remote control via Home Assistant:
 
-- **Switches** — toggle individual screens on/off
-- **Selects** — color scheme, gradient type, fill direction, marker style, Game of Life speed
+- **Switches** — toggle individual screens on/off, complex GoL patterns
+- **Selects** — color scheme, gradient type, fill direction, marker style, marker color, year day/event style, Game of Life speed
 - **Numbers** — brightness, bed time, work hours, screen cycle time
 - **Text inputs** — year events (comma-separated dates), time override for testing
+- **Sensors** — GoL final generation/population, heap free, loop time
 
 See the full configuration in the project repository for examples.
 
