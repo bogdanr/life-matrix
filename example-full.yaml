@@ -34,13 +34,13 @@ esphome:
             // Register HA entities for bidirectional sync (physical UI → HA)
             id(life_matrix_component)->set_ha_complex_patterns(id(gol_complex_patterns));
             id(life_matrix_component)->set_ha_conway_speed(id(conway_speed));
-            id(life_matrix_component)->set_ha_color_scheme(id(color_scheme));
+            id(life_matrix_component)->set_ha_style(id(style));
             id(life_matrix_component)->set_ha_gradient_type(id(gradient_type));
             id(life_matrix_component)->set_ha_fill_direction(id(fill_direction));
             id(life_matrix_component)->set_ha_marker_style(id(marker_style));
             id(life_matrix_component)->set_ha_marker_color(id(marker_color));
             id(life_matrix_component)->set_ha_text_area_position(id(text_area_position));
-            id(life_matrix_component)->set_ha_year_day_style(id(year_day_style));
+            id(life_matrix_component)->set_ha_day_fill(id(day_fill));
             id(life_matrix_component)->set_ha_year_event_style(id(year_event_style));
             id(life_matrix_component)->set_ha_bed_time_hour(id(bed_time_hour));
             id(life_matrix_component)->set_ha_work_start_hour(id(work_start_hour));
@@ -241,8 +241,8 @@ text:
 # -------------------------------------------------------------------------
 select:
   - platform: template
-    name: "Color Scheme"
-    id: color_scheme
+    name: "Style"
+    id: style
     icon: "mdi:palette"
     entity_category: config
     optimistic: true
@@ -254,7 +254,7 @@ select:
       - "Rainbow"
     initial_option: "Time Segments"
     on_value:
-      - lambda: id(life_matrix_component)->set_color_scheme(x);
+      - lambda: id(life_matrix_component)->set_style(x);
 
   - platform: template
     name: "Gradient Type"
@@ -337,19 +337,19 @@ select:
       - lambda: id(life_matrix_component)->set_text_area_position(x);
 
   - platform: template
-    name: "Year Day Style"
-    id: year_day_style
+    name: "Day Fill"
+    id: day_fill
     icon: "mdi:calendar-blank"
     entity_category: config
     optimistic: true
     restore_value: true
     options:
-      - "Activity"
-      - "Scheme"
-      - "Activity + Scheme"
-    initial_option: "Activity + Scheme"
+      - "Fixed"
+      - "Flat"
+      - "Shaded"
+    initial_option: "Shaded"
     on_value:
-      - lambda: id(life_matrix_component)->set_year_day_style(x);
+      - lambda: id(life_matrix_component)->set_day_fill(x);
 
   - platform: template
     name: "Year Event Style"
@@ -785,7 +785,7 @@ life_matrix:
     work_start_hour: 9
     work_end_hour: 17
 
-  color_scheme: "Time Segments"
+  style: "Time Segments"
   gradient_type: "Red-Blue"
   text_area_position: "Top"
   fill_direction: "Bottom to Top"

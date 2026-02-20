@@ -467,6 +467,8 @@ void LifeMatrix::next_settings_cursor() {
     max_cursor = 5;  // 3 global + 3 day settings
   } else if (screen_id == SCREEN_GAME_OF_LIFE) {
     max_cursor = 4;  // 3 global + 2 GoL settings
+  } else if (screen_id == SCREEN_MONTH) {
+    max_cursor = 6;  // 3 global + 4 month settings (style, fill dir, day fill, marker color)
   } else if (screen_id == SCREEN_YEAR) {
     max_cursor = 6;  // 3 global + 4 year settings
   }
@@ -490,6 +492,8 @@ void LifeMatrix::prev_settings_cursor() {
     max_cursor = 5;
   } else if (screen_id == SCREEN_GAME_OF_LIFE) {
     max_cursor = 4;
+  } else if (screen_id == SCREEN_MONTH) {
+    max_cursor = 6;  // 3 global + 4 month settings (style, fill dir, day fill, marker color)
   } else if (screen_id == SCREEN_YEAR) {
     max_cursor = 6;
   }
@@ -528,7 +532,7 @@ void LifeMatrix::adjust_setting(int direction) {
   static const char* const gt_names[] = {"Red-Blue", "Green-Yellow", "Cyan-Magenta", "Purple-Orange", "Blue-Yellow"};
   static const char* const ms_names[] = {"None", "Single Dot", "Gradient Peak"};
   static const char* const mc_names[] = {"Blue", "White", "Yellow", "Red", "Green", "Cyan", "Magenta"};
-  static const char* const yds_names[] = {"Activity", "Scheme", "Activity + Scheme"};
+  static const char* const yds_names[] = {"Fixed", "Flat", "Shaded"};
   static const char* const speed_names[] = {"Fast (50ms)", "Normal (200ms)", "Slow (1000ms)"};
 
   // Not in settings mode: adjust screen cycle time
@@ -566,9 +570,9 @@ void LifeMatrix::adjust_setting(int direction) {
 
     if (screen_id == SCREEN_HOUR) {
       if (local == 0) {
-        color_scheme_ = (ColorScheme)cycle_enum((int)color_scheme_, 3);
-        if (ha_color_scheme_) ha_color_scheme_->publish_state(cs_names[color_scheme_]);
-        ESP_LOGD(TAG, "Color scheme: %d", (int)color_scheme_);
+        style_ = (DisplayStyle)cycle_enum((int)style_, 3);
+        if (ha_style_) ha_style_->publish_state(cs_names[style_]);
+        ESP_LOGD(TAG, "Style: %d", (int)style_);
       } else if (local == 1) {
         gradient_type_ = (GradientType)cycle_enum((int)gradient_type_, 4);
         if (ha_gradient_type_) ha_gradient_type_->publish_state(gt_names[gradient_type_]);
@@ -620,19 +624,37 @@ void LifeMatrix::adjust_setting(int direction) {
         if (ha_complex_patterns_) ha_complex_patterns_->publish_state(game_config_.complex_patterns);
         ESP_LOGD(TAG, "Complex patterns: %s", game_config_.complex_patterns ? "on" : "off");
       }
+    } else if (screen_id == SCREEN_MONTH) {
+      if (local == 0) {
+        style_ = (DisplayStyle)cycle_enum((int)style_, 3);
+        if (ha_style_) ha_style_->publish_state(cs_names[style_]);
+        ESP_LOGD(TAG, "Style: %d", (int)style_);
+      } else if (local == 1) {
+        fill_direction_bottom_to_top_ = !fill_direction_bottom_to_top_;
+        if (ha_fill_direction_) ha_fill_direction_->publish_state(fill_direction_bottom_to_top_ ? "Bottom to Top" : "Top to Bottom");
+        ESP_LOGD(TAG, "Fill direction: %s", fill_direction_bottom_to_top_ ? "Bottom to Top" : "Top to Bottom");
+      } else if (local == 2) {
+        day_fill_style_ = (DayFillStyle)cycle_enum((int)day_fill_style_, 2);
+        if (ha_day_fill_) ha_day_fill_->publish_state(yds_names[day_fill_style_]);
+        ESP_LOGD(TAG, "Day fill: %d", (int)day_fill_style_);
+      } else if (local == 3) {
+        marker_color_ = (MarkerColor)cycle_enum((int)marker_color_, 6);
+        if (ha_marker_color_) ha_marker_color_->publish_state(mc_names[marker_color_]);
+        ESP_LOGD(TAG, "Marker color: %d", (int)marker_color_);
+      }
     } else if (screen_id == SCREEN_YEAR) {
       if (local == 0) {
-        color_scheme_ = (ColorScheme)cycle_enum((int)color_scheme_, 3);
-        if (ha_color_scheme_) ha_color_scheme_->publish_state(cs_names[color_scheme_]);
-        ESP_LOGD(TAG, "Color scheme: %d", (int)color_scheme_);
+        style_ = (DisplayStyle)cycle_enum((int)style_, 3);
+        if (ha_style_) ha_style_->publish_state(cs_names[style_]);
+        ESP_LOGD(TAG, "Style: %d", (int)style_);
       } else if (local == 1) {
         marker_style_ = (MarkerStyle)cycle_enum((int)marker_style_, 2);
         if (ha_marker_style_) ha_marker_style_->publish_state(ms_names[marker_style_]);
         ESP_LOGD(TAG, "Marker style: %d", (int)marker_style_);
       } else if (local == 2) {
-        year_day_style_ = (YearDayStyle)cycle_enum((int)year_day_style_, 2);
-        if (ha_year_day_style_) ha_year_day_style_->publish_state(yds_names[year_day_style_]);
-        ESP_LOGD(TAG, "Year day style: %d", (int)year_day_style_);
+        day_fill_style_ = (DayFillStyle)cycle_enum((int)day_fill_style_, 2);
+        if (ha_day_fill_) ha_day_fill_->publish_state(yds_names[day_fill_style_]);
+        ESP_LOGD(TAG, "Day fill: %d", (int)day_fill_style_);
       } else if (local == 3) {
         if (year_event_style_ == YEAR_EVENT_NONE) {
           year_event_style_ = YEAR_EVENT_PULSE;
@@ -665,7 +687,7 @@ std::string LifeMatrix::get_current_setting_name() {
   // Per-screen settings
   int local = cursor - 3;
   if (screen_id == SCREEN_HOUR) {
-    if (local == 0) return "Color";
+    if (local == 0) return "Style";
     if (local == 1) return "Grad";
     if (local == 2) return "Fill";
     if (local == 3) return "Mark";
@@ -677,10 +699,15 @@ std::string LifeMatrix::get_current_setting_name() {
   } else if (screen_id == SCREEN_GAME_OF_LIFE) {
     if (local == 0) return "Speed";
     if (local == 1) return "Cmplx";
+  } else if (screen_id == SCREEN_MONTH) {
+    if (local == 0) return "Style";
+    if (local == 1) return "Fill";
+    if (local == 2) return "DFill";
+    if (local == 3) return "MkClr";
   } else if (screen_id == SCREEN_YEAR) {
-    if (local == 0) return "Color";
+    if (local == 0) return "Style";
     if (local == 1) return "Mark";
-    if (local == 2) return "Days";
+    if (local == 2) return "DFill";
     if (local == 3) return "Event";
   }
   return "?";
@@ -706,10 +733,10 @@ std::string LifeMatrix::get_current_setting_value() {
   if (screen_id == SCREEN_HOUR) {
     if (local == 0) {
       // Color scheme
-      if (color_scheme_ == COLOR_SINGLE) return "Singl";
-      if (color_scheme_ == COLOR_GRADIENT) return "Gradt";
-      if (color_scheme_ == COLOR_TIME_SEGMENTS) return "TmSeg";
-      if (color_scheme_ == COLOR_RAINBOW) return "Rainb";
+      if (style_ == STYLE_SINGLE) return "Singl";
+      if (style_ == STYLE_GRADIENT) return "Gradt";
+      if (style_ == STYLE_TIME_SEGMENTS) return "TmSeg";
+      if (style_ == STYLE_RAINBOW) return "Rainb";
     } else if (local == 1) {
       // Gradient type
       if (gradient_type_ == GRADIENT_RED_BLUE) return "RedBl";
@@ -756,23 +783,45 @@ std::string LifeMatrix::get_current_setting_value() {
     } else if (local == 1) {
       return game_config_.complex_patterns ? "ON" : "OFF";
     }
+  } else if (screen_id == SCREEN_MONTH) {
+    if (local == 0) {
+      if (style_ == STYLE_SINGLE) return "Singl";
+      if (style_ == STYLE_GRADIENT) return "Gradt";
+      if (style_ == STYLE_TIME_SEGMENTS) return "TmSeg";
+      if (style_ == STYLE_RAINBOW) return "Rainb";
+    } else if (local == 1) {
+      return fill_direction_bottom_to_top_ ? "BotT" : "TopB";
+    } else if (local == 2) {
+      // Day fill
+      if (day_fill_style_ == DAY_FILL_ACTIVITY) return "Fixed";
+      if (day_fill_style_ == DAY_FILL_SCHEME) return "Flat";
+      if (day_fill_style_ == DAY_FILL_MIXED) return "Shade";
+    } else if (local == 3) {
+      if (marker_color_ == MARKER_BLUE) return "Blue";
+      if (marker_color_ == MARKER_WHITE) return "White";
+      if (marker_color_ == MARKER_YELLOW) return "Yellw";
+      if (marker_color_ == MARKER_RED) return "Red";
+      if (marker_color_ == MARKER_GREEN) return "Green";
+      if (marker_color_ == MARKER_CYAN) return "Cyan";
+      if (marker_color_ == MARKER_MAGENTA) return "Magnt";
+    }
   } else if (screen_id == SCREEN_YEAR) {
     if (local == 0) {
       // Color scheme
-      if (color_scheme_ == COLOR_SINGLE) return "Singl";
-      if (color_scheme_ == COLOR_GRADIENT) return "Gradt";
-      if (color_scheme_ == COLOR_TIME_SEGMENTS) return "TmSeg";
-      if (color_scheme_ == COLOR_RAINBOW) return "Rainb";
+      if (style_ == STYLE_SINGLE) return "Singl";
+      if (style_ == STYLE_GRADIENT) return "Gradt";
+      if (style_ == STYLE_TIME_SEGMENTS) return "TmSeg";
+      if (style_ == STYLE_RAINBOW) return "Rainb";
     } else if (local == 1) {
       // Marker style
       if (marker_style_ == MARKER_NONE) return "None";
       if (marker_style_ == MARKER_SINGLE_DOT) return "Dot";
       if (marker_style_ == MARKER_GRADIENT_PEAK) return "Peak";
     } else if (local == 2) {
-      // Day style
-      if (year_day_style_ == YEAR_DAY_ACTIVITY) return "Activ";
-      if (year_day_style_ == YEAR_DAY_SCHEME) return "Schme";
-      if (year_day_style_ == YEAR_DAY_ACTIVITY_SCHEME) return "Both";
+      // Day fill
+      if (day_fill_style_ == DAY_FILL_ACTIVITY) return "Fixed";
+      if (day_fill_style_ == DAY_FILL_SCHEME) return "Flat";
+      if (day_fill_style_ == DAY_FILL_MIXED) return "Shade";
     } else if (local == 3) {
       // Event style
       if (year_event_style_ == YEAR_EVENT_NONE) return "None";
@@ -963,8 +1012,29 @@ void LifeMatrix::render(display::Display &it, ESPTime &time) {
     return;
   }
 
-  // Use fake time if override is active
-  ESPTime &display_time = time_override_active_ ? fake_time_ : time;
+  // Build display time — fake time ticks forward from the moment it was set
+  ESPTime display_time_val;
+  if (time_override_active_) {
+    display_time_val = fake_time_;
+    uint32_t elapsed_s = (uint32_t)((millis() - time_override_start_ms_) / 1000u);
+    int s = display_time_val.second + (int)elapsed_s;
+    int m = display_time_val.minute + s / 60;
+    display_time_val.second = s % 60;
+    int h = display_time_val.hour + m / 60;
+    display_time_val.minute = m % 60;
+    int day_carry = h / 24;
+    display_time_val.hour = h % 24;
+    if (day_carry > 0) {
+      display_time_val.day_of_month += day_carry;
+      display_time_val.day_of_year  += day_carry;
+    }
+  } else {
+    display_time_val = time;
+  }
+  ESPTime &display_time = display_time_val;
+
+  // Check for hourly celebration trigger (on all screens)
+  check_celebration(display_time);
 
   // Calculate viewport
   Viewport vp = calculate_viewport(it);
@@ -1006,6 +1076,18 @@ void LifeMatrix::render(display::Display &it, ESPTime &time) {
         it.print(center_x, center_y - 5, font_small_, color_highlight_, display::TextAlign::CENTER, "Soon");
       }
       break;
+  }
+
+  // Celebration overlay (sparkle burst on event days, time screens only)
+  if (celebration_active_) {
+    bool is_time_screen = (screen_id == SCREEN_HOUR || screen_id == SCREEN_DAY ||
+                           screen_id == SCREEN_MONTH || screen_id == SCREEN_YEAR);
+    uint32_t elapsed = (uint32_t)(millis() - celebration_start_);
+    if (elapsed >= 3000) {
+      celebration_active_ = false;
+    } else if (is_time_screen) {
+      render_celebration_overlay(it, elapsed);
+    }
   }
 
   // Render UI overlays on top
@@ -1188,45 +1270,245 @@ void LifeMatrix::render_big_bang_animation(display::Display &it, int viz_y, int 
 }
 
 void LifeMatrix::render_month_view(display::Display &it, ESPTime &time, int viz_y, int viz_height) {
-  int center_x = it.get_width() / 2;
   Viewport vp = calculate_viewport(it);
+  int center_x = it.get_width() / 2;
 
-  // Display month name
+  // Text area: month name only (no year)
   char month_str[4];
   time.strftime(month_str, sizeof(month_str), "%b");
   it.print(center_x, vp.text_y, font_small_, color_active_, display::TextAlign::CENTER, month_str);
 
-  // Calculate days in month
-  int month = time.month;
-  int year = time.year;
-  int days_in_month;
-  if (month == 2) {
-    days_in_month = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 29 : 28;
-  } else if (month == 4 || month == 6 || month == 9 || month == 11) {
-    days_in_month = 30;
-  } else {
-    days_in_month = 31;
+  // Days in this month
+  uint8_t month_days[12];
+  get_days_in_month(time.year, month_days);
+  int days_in_month = month_days[time.month - 1];
+
+  // Build per-day event lookup for the current month
+  bool event_day[32] = {};  // index = day-1
+  for (const auto &evt : year_events_) {
+    if (evt.month == time.month && evt.day >= 1 && evt.day <= 31)
+      event_day[evt.day - 1] = true;
   }
 
-  // Fill rows with gradient based on day progress
-  int dom = time.day_of_month;
-  int filled_rows = (dom * viz_height) / days_in_month;
+  // Grid: 4 columns × 8 rows = 32 slots, days flow left→right, top→bottom
+  const int COLS = 4;
+  const int ROWS = 8;
+  const int cell_w = 8;   // 32px / 4 cols
+  int cell_h = viz_height / ROWS;
+  if (cell_h < 2) cell_h = 2;
 
-  for (int row = 0; row < viz_height; row++) {
-    int y_pos = fill_direction_bottom_to_top_ ? (viz_y + viz_height - 1 - row) : (viz_y + row);
+  // Marker color for today border blending
+  Color today_clr = get_marker_color_value(marker_color_);
 
-    if (row < filled_rows) {
-      float progress = (float)row / (float)viz_height;
-      Color pixel_color = Color(
-        (int)(255 * progress),
-        (int)(200 * (1.0f - progress)),
-        (int)(100 + 100 * progress)
-      );
+  // Breathing rainbow animation
+  float breath_factor = 0.5f + 0.5f * sinf((float)(millis() % 3000u) / 477.0f);
+  int hue_offset = (int)((millis() / 27u) % 360u);
 
-      for (int col = 1; col <= 30; col++) {
-        it.draw_pixel_at(col, y_pos, pixel_color);
+  float prog_scale = (days_in_month > 1) ? 1.0f / (float)(days_in_month - 1) : 0.0f;
+
+  // European week offset: day-of-week of day 1, 0=Mon … 6=Sun
+  // dow formula: 1=Sun, 2=Mon, …, 7=Sat
+  int dow_day1 = ((time.day_of_week - 1 + (1 - (int)time.day_of_month)) % 7 + 7) % 7 + 1;
+  int eu_offset_day1 = (dow_day1 == 1) ? 6 : (dow_day1 - 2);  // 0=Mon, …, 6=Sun
+
+  // Track today's cell position for the moment pixel (drawn after the loop)
+  int today_cy = viz_y;
+  int today_cx = 0;
+
+  for (int day = 1; day <= days_in_month; day++) {
+    int slot = day - 1;
+    int col = slot % COLS;
+    int row_idx = slot / COLS;
+    if (row_idx >= ROWS) break;
+
+    int cx = col * cell_w;
+    // Fill direction controls row order: bottom-to-top puts day 1 at the bottom row
+    int cy = fill_direction_bottom_to_top_
+               ? viz_y + (ROWS - 1 - row_idx) * cell_h
+               : viz_y + row_idx * cell_h;
+
+    // Day-of-week for this day (to detect weekends)
+    int delta = day - time.day_of_month;
+    int dow = ((time.day_of_week - 1 + delta) % 7 + 7) % 7 + 1;  // 1=Sun, 7=Sat
+    bool is_weekend = (dow == 1 || dow == 7);
+
+    bool is_today  = (day == time.day_of_month);
+    bool is_future = (day > time.day_of_month);
+    bool is_event  = event_day[day - 1];
+
+    if (is_today) {
+      today_cy = cy;
+      today_cx = cx;
+    }
+
+    // Elapsed pixels within cell_h (uses full 24h span, same as get_activity_type)
+    int elapsed_px;
+    int today_x_frac = 0;  // x pixels already elapsed within the current-time row
+    if (is_future) {
+      elapsed_px = 0;
+    } else if (is_today) {
+      float tf = (time.hour * 60.0f + time.minute) / (24.0f * 60.0f);
+      elapsed_px = (int)(tf * cell_h);
+      today_x_frac = (int)(tf * cell_w);
+      if (today_x_frac >= cell_w) today_x_frac = cell_w;
+    } else {
+      elapsed_px = cell_h;
+    }
+
+    // Per-day accent color driven by style setting
+    // Week palette for Time Segments: 5 colors mapping weeks→seasons within the month
+    static const Color week_colors[5] = {
+      Color(60,  180,  80),   // week 1: spring green
+      Color(220, 180,   0),   // week 2: summer gold
+      Color(220, 100,  20),   // week 3: autumn orange
+      Color(180,  40,  40),   // week 4: late autumn red
+      Color( 60,  80, 180),   // week 5: winter blue
+    };
+    int week_idx = (day - 1 + eu_offset_day1) / 7;  // 0-4, European Mon–Sun weeks
+    if (week_idx > 4) week_idx = 4;
+
+    float prog = (float)(day - 1) * prog_scale;
+    Color accent;
+    if (style_ == STYLE_TIME_SEGMENTS) {
+      accent = week_colors[week_idx];
+    } else if (style_ == STYLE_GRADIENT) {
+      accent = interpolate_gradient(prog, gradient_type_);
+    } else if (style_ == STYLE_RAINBOW) {
+      accent = hsv_to_rgb((int)(prog * 360.0f), 1.0f, 1.0f);
+    } else {
+      accent = color_active_;
+    }
+
+    // Complementary color for event borders
+    Color event_clr = get_complementary_color(accent);
+    float pulse_sin = 0.5f + 0.5f * sinf((float)(millis() % 2513u) / 400.0f);
+    int pulse_bright = 77 + (int)(pulse_sin * 178.0f);  // 77-255 range
+
+    // Draw bar pixels — p=0 is start-of-day, p=cell_h-1 is end-of-day
+    for (int p = 0; p < cell_h; p++) {
+      // Activity type uses bed_time_hour, work_start_hour, work_end_hour (same as year view)
+      uint8_t activity = get_activity_type(p, cell_h, is_weekend);
+
+      Color c;
+      if (day_fill_style_ == DAY_FILL_ACTIVITY) {
+        // Fixed activity palette
+        if (activity == 0)      c = Color(50, 50, 50);   // sleep: dark gray
+        else if (activity == 1) c = Color(255, 120, 0);  // work: orange
+        else                    c = Color(0, 200, 100);   // life: green
+      } else if (day_fill_style_ == DAY_FILL_SCHEME) {
+        c = accent;  // all pixels use full accent color
+      } else {  // DAY_FILL_MIXED
+        if (activity == 0)      c = Color(accent.r >> 2, accent.g >> 2, accent.b >> 2);  // sleep: dim
+        else if (activity == 1) c = Color(accent.r >> 1, accent.g >> 1, accent.b >> 1);  // work: half
+        else                    c = accent;                                                 // life: full
+      }
+
+      Color c_full = c;  // full-brightness color before any dimming
+      if (p >= elapsed_px) {
+        if (is_future) {
+          // Future days: completely dark
+          c = Color(0, 0, 0);
+        } else {
+          // Today's remaining time: 1/4 brightness of activity color
+          c = Color(c.r >> 2, c.g >> 2, c.b >> 2);
+        }
+      }
+
+      int y_pos = fill_direction_bottom_to_top_ ? (cy + cell_h - 1 - p) : (cy + p);
+      bool past_or_today = !is_future;
+
+      for (int bx = 0; bx < cell_w; bx++) {
+        Color draw_c = c;
+        // Current-time row in today's cell: left portion (already elapsed) at full brightness
+        if (is_today && p == elapsed_px && bx < today_x_frac) {
+          draw_c = c_full;
+        }
+        bool on_border = (y_pos == cy || y_pos == cy + cell_h - 1 || bx == 0 || bx == cell_w - 1);
+
+        if (on_border) {
+          if (marker_style_ != MARKER_NONE && is_today && is_event) {
+            // Three-way blend: cell color + today marker + event complementary
+            draw_c = Color(
+              (uint8_t)((c.r + today_clr.r + event_clr.r) / 3),
+              (uint8_t)((c.g + today_clr.g + event_clr.g) / 3),
+              (uint8_t)((c.b + today_clr.b + event_clr.b) / 3)
+            );
+          } else if (marker_style_ != MARKER_NONE && is_today) {
+            draw_c = Color(
+              (uint8_t)((c.r + today_clr.r) >> 1),
+              (uint8_t)((c.g + today_clr.g) >> 1),
+              (uint8_t)((c.b + today_clr.b) >> 1)
+            );
+          } else if (is_event && year_event_style_ != YEAR_EVENT_NONE) {
+            Color border_clr;
+            if (year_event_style_ == YEAR_EVENT_MARKERS) {
+              if (past_or_today) {
+                border_clr = Color(
+                  (uint8_t)((c.r + event_clr.r) >> 1),
+                  (uint8_t)((c.g + event_clr.g) >> 1),
+                  (uint8_t)((c.b + event_clr.b) >> 1)
+                );
+              } else {
+                Color dim_evt = Color(event_clr.r >> 3, event_clr.g >> 3, event_clr.b >> 3);
+                border_clr = Color(
+                  (uint8_t)((c.r + dim_evt.r) >> 1),
+                  (uint8_t)((c.g + dim_evt.g) >> 1),
+                  (uint8_t)((c.b + dim_evt.b) >> 1)
+                );
+              }
+            } else {  // YEAR_EVENT_PULSE
+              if (past_or_today) {
+                Color pulsed = Color(
+                  (uint8_t)((event_clr.r * pulse_bright) >> 8),
+                  (uint8_t)((event_clr.g * pulse_bright) >> 8),
+                  (uint8_t)((event_clr.b * pulse_bright) >> 8)
+                );
+                border_clr = Color(
+                  (uint8_t)((c.r + pulsed.r) >> 1),
+                  (uint8_t)((c.g + pulsed.g) >> 1),
+                  (uint8_t)((c.b + pulsed.b) >> 1)
+                );
+              } else {
+                Color dim_evt = Color(event_clr.r >> 2, event_clr.g >> 2, event_clr.b >> 2);
+                border_clr = Color(
+                  (uint8_t)((c.r + dim_evt.r) >> 1),
+                  (uint8_t)((c.g + dim_evt.g) >> 1),
+                  (uint8_t)((c.b + dim_evt.b) >> 1)
+                );
+              }
+            }
+            draw_c = border_clr;
+          }
+        }
+        it.draw_pixel_at(cx + bx, y_pos, draw_c);
       }
     }
+  }
+
+  // Current moment: breathing rainbow pixel at the fill edge inside today's cell
+  // x sweeps left→right across the cell width; y tracks the fill boundary
+  {
+    float time_frac = (time.hour * 60.0f + time.minute) / (24.0f * 60.0f);
+
+    // x: maps time of day across today's cell width
+    int pixel_x = today_cx + (int)(time_frac * cell_w);
+    if (pixel_x >= today_cx + cell_w) pixel_x = today_cx + cell_w - 1;
+
+    // y: at the leading edge of the filled region within today's cell
+    int elapsed_px = (int)(time_frac * cell_h);
+    if (elapsed_px >= cell_h) elapsed_px = cell_h - 1;
+    int pixel_y = fill_direction_bottom_to_top_
+                    ? (today_cy + cell_h - 1 - elapsed_px)
+                    : (today_cy + elapsed_px);
+
+    int hue = (hue_offset + (time.month - 1) * 30) % 360;
+    Color rainbow = hsv_to_rgb(hue, 1.0f, 1.0f);
+    Color breathing = Color(
+      (uint8_t)(rainbow.r * breath_factor),
+      (uint8_t)(rainbow.g * breath_factor),
+      (uint8_t)(rainbow.b * breath_factor)
+    );
+    it.draw_pixel_at(pixel_x, pixel_y, breathing);
   }
 }
 
@@ -1341,7 +1623,7 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
   int pixels_in_row = second % 30;  // How many pixels filled in current row (0-29)
 
   // Handle Time Segments separately (spiral filling, not line-by-line)
-  if (color_scheme_ == COLOR_TIME_SEGMENTS) {
+  if (style_ == STYLE_TIME_SEGMENTS) {
     // Draw all 4 quarters as spirals
     for (int q = 0; q < 4; q++) {
       int quarter_start_row = q * 30;
@@ -1446,10 +1728,10 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
       // Determine color based on scheme
       Color pixel_color = color_active_;
 
-      if (color_scheme_ == COLOR_GRADIENT) {
+      if (style_ == STYLE_GRADIENT) {
         float progress = (float)row / 120.0f;
         pixel_color = interpolate_gradient(progress, gradient_type_);
-      } else if (color_scheme_ == COLOR_RAINBOW) {
+      } else if (style_ == STYLE_RAINBOW) {
         int hue = (row * 360) / 120;
         pixel_color = hsv_to_rgb(hue, 1.0f, 1.0f);
       }
@@ -1458,6 +1740,23 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
       it.draw_pixel_at(x_pos, y_pos, pixel_color);
     }
   }
+}
+
+Color LifeMatrix::get_complementary_color(Color c) {
+  uint8_t max_c = std::max({c.r, c.g, c.b});
+  uint8_t min_c = std::min({c.r, c.g, c.b});
+  int hue = 0;
+  if (max_c != min_c) {
+    if (max_c == c.r) {
+      hue = (int)(60.0f * ((c.g - c.b) / (float)(max_c - min_c)));
+    } else if (max_c == c.g) {
+      hue = (int)(60.0f * (2.0f + (c.b - c.r) / (float)(max_c - min_c)));
+    } else {
+      hue = (int)(60.0f * (4.0f + (c.r - c.g) / (float)(max_c - min_c)));
+    }
+    if (hue < 0) hue += 360;
+  }
+  return hsv_to_rgb((hue + 180) % 360, 1.0f, 1.0f);
 }
 
 void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y, int viz_height) {
@@ -1529,11 +1828,11 @@ void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y
   for (int m = 0; m < 12; m++) {
     float progress = (float)m / 11.0f;
 
-    if (color_scheme_ == COLOR_SINGLE) {
+    if (style_ == STYLE_SINGLE) {
       scheme_colors[m] = color_active_;
-    } else if (color_scheme_ == COLOR_GRADIENT) {
+    } else if (style_ == STYLE_GRADIENT) {
       scheme_colors[m] = interpolate_gradient(progress, gradient_type_);
-    } else if (color_scheme_ == COLOR_TIME_SEGMENTS) {
+    } else if (style_ == STYLE_TIME_SEGMENTS) {
       // Season palette for Time Segments
       static const uint8_t season_r[] = {100,140,60,120,180,255,255,255,180,150,100,60};
       static const uint8_t season_g[] = {160,190,180,220,240,200,120,160,100,60,60,100};
@@ -1548,17 +1847,17 @@ void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y
   // Pre-compute activity colors for each month and activity type
   Color activity_colors[12][3];  // [month][type: 0=sleep, 1=work, 2=life]
   for (int m = 0; m < 12; m++) {
-    if (year_day_style_ == YEAR_DAY_ACTIVITY) {
+    if (day_fill_style_ == DAY_FILL_ACTIVITY) {
       // Fixed activity colors
       activity_colors[m][0] = Color(50, 50, 50);      // Sleep: dark gray
       activity_colors[m][1] = Color(255, 120, 0);     // Work: orange
       activity_colors[m][2] = Color(0, 200, 100);     // Life: green
-    } else if (year_day_style_ == YEAR_DAY_ACTIVITY_SCHEME) {
+    } else if (day_fill_style_ == DAY_FILL_MIXED) {
       // Activity + Scheme: sleep=dark, work=scheme*0.5, life=scheme
       activity_colors[m][0] = Color(50, 50, 50);
       activity_colors[m][1] = Color(scheme_colors[m].r >> 1, scheme_colors[m].g >> 1, scheme_colors[m].b >> 1);
       activity_colors[m][2] = scheme_colors[m];
-    } else {  // YEAR_DAY_SCHEME
+    } else {  // DAY_FILL_SCHEME
       // All same color
       activity_colors[m][0] = scheme_colors[m];
       activity_colors[m][1] = scheme_colors[m];
@@ -1569,26 +1868,7 @@ void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y
   // Pre-compute event colors (for Pulse mode) - use complementary colors
   Color event_colors[12];
   for (int m = 0; m < 12; m++) {
-    // Convert scheme color to HSV to get complementary hue
-    Color scheme_color = scheme_colors[m];
-    uint8_t max_c = std::max({scheme_color.r, scheme_color.g, scheme_color.b});
-    uint8_t min_c = std::min({scheme_color.r, scheme_color.g, scheme_color.b});
-    int hue = 0;
-
-    if (max_c != min_c) {
-      if (max_c == scheme_color.r) {
-        hue = 60 * ((scheme_color.g - scheme_color.b) / (float)(max_c - min_c));
-      } else if (max_c == scheme_color.g) {
-        hue = 60 * (2 + (scheme_color.b - scheme_color.r) / (float)(max_c - min_c));
-      } else {
-        hue = 60 * (4 + (scheme_color.r - scheme_color.g) / (float)(max_c - min_c));
-      }
-      if (hue < 0) hue += 360;
-    }
-
-    // Complementary hue: opposite on color wheel (+180°)
-    int complementary_hue = (hue + 180) % 360;
-    event_colors[m] = hsv_to_rgb(complementary_hue, 1.0f, 1.0f);
+    event_colors[m] = get_complementary_color(scheme_colors[m]);
   }
 
   // Pulse animation (breathing effect, 0.3-1.0 range)
@@ -1737,6 +2017,88 @@ void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y
   }
 }
 
+void LifeMatrix::check_celebration(ESPTime &time) {
+  // Re-trigger once per hour on event days
+  if (time.hour == last_celebration_hour_ &&
+      time.day_of_month == last_celebration_day_ &&
+      time.month == last_celebration_month_)
+    return;  // Same hour, no check needed
+  last_celebration_hour_  = time.hour;
+  last_celebration_day_   = time.day_of_month;
+  last_celebration_month_ = time.month;
+  for (const auto &evt : year_events_) {
+    if (evt.month == time.month && evt.day == time.day_of_month) {
+      celebration_active_ = true;
+      celebration_start_  = millis();
+      ESP_LOGD(TAG, "Celebration triggered for %d-%02d h%d", time.month, time.day_of_month, time.hour);
+      break;
+    }
+  }
+}
+
+void LifeMatrix::render_sparkle_celebration(display::Display &it, uint32_t elapsed_ms) {
+  float progress = (float)elapsed_ms / 3000.0f;
+  float density  = (1.0f - progress) * (1.0f - progress);  // quadratic falloff
+  int   count    = (int)(60.0f * density);
+
+  uint32_t seed = elapsed_ms / 40u;  // Changes every 40ms for flicker
+  int w = it.get_width(), h = it.get_height();
+  for (int i = 0; i < count; i++) {
+    seed = seed * 1664525u + 1013904223u;
+    int x = (int)((seed >> 16) % (uint32_t)w);
+    seed = seed * 1664525u + 1013904223u;
+    int y = (int)((seed >> 16) % (uint32_t)h);
+    seed = seed * 1664525u + 1013904223u;
+    int hue = (int)((seed >> 16) % 360u);
+    it.draw_pixel_at(x, y, hsv_to_rgb(hue, 1.0f, 1.0f));
+  }
+}
+
+void LifeMatrix::render_plasma_celebration(display::Display &it, uint32_t elapsed_ms) {
+  float t = (float)elapsed_ms * 0.001f;  // seconds
+  int w = it.get_width();
+  int h = it.get_height();
+
+  // Brightness envelope: fade in over 0.4s, hold, fade out over final 0.6s
+  float progress = (float)elapsed_ms / 3000.0f;
+  float brightness;
+  if (progress < 0.13f) {
+    brightness = progress / 0.13f;
+  } else if (progress > 0.8f) {
+    brightness = 1.0f - (progress - 0.8f) / 0.2f;
+  } else {
+    brightness = 1.0f;
+  }
+
+  for (int y = 0; y < h; y++) {
+    float fy = (float)y;
+    for (int x = 0; x < w; x++) {
+      float fx = (float)x;
+      // Four overlapping sine waves: horizontal, vertical, diagonal, radial
+      float v = sinf(fx * 0.30f + t * 2.1f)
+              + sinf(fy * 0.13f + t * 1.7f)
+              + sinf((fx + fy) * 0.18f + t * 1.4f)
+              + sinf(sqrtf(fx * fx + fy * fy) * 0.22f - t * 1.1f);
+      // v in [-4, 4] → hue 0–360
+      int hue = (int)((v + 4.0f) * 45.0f) % 360;
+      if (hue < 0) hue += 360;
+      it.draw_pixel_at(x, y, hsv_to_rgb(hue, 1.0f, brightness));
+    }
+  }
+}
+
+void LifeMatrix::render_celebration_overlay(display::Display &it, uint32_t elapsed_ms) {
+  switch (celebration_style_) {
+    case CELEB_PLASMA:
+      render_plasma_celebration(it, elapsed_ms);
+      break;
+    case CELEB_SPARKLE:
+    default:
+      render_sparkle_celebration(it, elapsed_ms);
+      break;
+  }
+}
+
 void LifeMatrix::render_ui_overlays(display::Display &it) {
   int width = it.get_width();
 
@@ -1763,15 +2125,15 @@ void LifeMatrix::render_ui_overlays(display::Display &it) {
 // CONFIGURATION SETTERS (String-based for YAML template entities)
 // ============================================================================
 
-void LifeMatrix::set_color_scheme(const std::string &scheme) {
-  if (scheme == "Single Color") {
-    color_scheme_ = COLOR_SINGLE;
-  } else if (scheme == "Gradient") {
-    color_scheme_ = COLOR_GRADIENT;
-  } else if (scheme == "Time Segments") {
-    color_scheme_ = COLOR_TIME_SEGMENTS;
-  } else if (scheme == "Rainbow") {
-    color_scheme_ = COLOR_RAINBOW;
+void LifeMatrix::set_style(const std::string &style) {
+  if (style == "Single Color") {
+    style_ = STYLE_SINGLE;
+  } else if (style == "Gradient") {
+    style_ = STYLE_GRADIENT;
+  } else if (style == "Time Segments") {
+    style_ = STYLE_TIME_SEGMENTS;
+  } else if (style == "Rainbow") {
+    style_ = STYLE_RAINBOW;
   }
 }
 
@@ -1821,13 +2183,13 @@ void LifeMatrix::set_year_events(const std::string &events) {
   parse_year_events(events);
 }
 
-void LifeMatrix::set_year_day_style(const std::string &style) {
-  if (style == "Activity") {
-    year_day_style_ = YEAR_DAY_ACTIVITY;
-  } else if (style == "Scheme Color") {
-    year_day_style_ = YEAR_DAY_SCHEME;
-  } else if (style == "Activity + Scheme") {
-    year_day_style_ = YEAR_DAY_ACTIVITY_SCHEME;
+void LifeMatrix::set_day_fill(const std::string &style) {
+  if (style == "Fixed" || style == "Activity") {  // "Activity" kept for backward compat
+    day_fill_style_ = DAY_FILL_ACTIVITY;
+  } else if (style == "Flat" || style == "Scheme") {  // "Scheme" kept for backward compat
+    day_fill_style_ = DAY_FILL_SCHEME;
+  } else if (style == "Shaded" || style == "Activity + Scheme") {  // old name kept
+    day_fill_style_ = DAY_FILL_MIXED;
   }
 }
 
@@ -2087,6 +2449,9 @@ void LifeMatrix::set_time_override(const std::string &time_str) {
   fake_time_.day_of_year = day_of_year;
 
   time_override_active_ = true;
+  time_override_start_ms_ = millis();
+  // Reset celebration tracking so new time is evaluated immediately
+  last_celebration_hour_ = 255;
   ESP_LOGI(TAG, "Time override set to: %04d-%02d-%02d %02d:%02d:%02d (DoW=%d, DoY=%d)",
            year, month, day, hour, minute, second, fake_time_.day_of_week, fake_time_.day_of_year);
 }

@@ -39,12 +39,12 @@ enum ScreenID {
   SCREEN_GAME_OF_LIFE = 5
 };
 
-// Color schemes
-enum ColorScheme {
-  COLOR_SINGLE = 0,
-  COLOR_GRADIENT = 1,
-  COLOR_TIME_SEGMENTS = 2,
-  COLOR_RAINBOW = 3
+// Display styles (how fill-bar views are colored)
+enum DisplayStyle {
+  STYLE_SINGLE = 0,
+  STYLE_GRADIENT = 1,
+  STYLE_TIME_SEGMENTS = 2,
+  STYLE_RAINBOW = 3
 };
 
 // Gradient types
@@ -74,11 +74,11 @@ enum MarkerColor {
   MARKER_MAGENTA = 6
 };
 
-// Year view day styles
-enum YearDayStyle {
-  YEAR_DAY_ACTIVITY = 0,
-  YEAR_DAY_SCHEME = 1,
-  YEAR_DAY_ACTIVITY_SCHEME = 2
+// Day fill styles (used by year and month views)
+enum DayFillStyle {
+  DAY_FILL_ACTIVITY = 0,
+  DAY_FILL_SCHEME   = 1,
+  DAY_FILL_MIXED    = 2
 };
 
 // Year view event styles
@@ -86,6 +86,12 @@ enum YearEventStyle {
   YEAR_EVENT_NONE = 0,
   YEAR_EVENT_PULSE = 1,
   YEAR_EVENT_MARKERS = 4
+};
+
+// Celebration animation styles
+enum CelebrationStyle {
+  CELEB_SPARKLE = 0,
+  CELEB_PLASMA  = 1
 };
 
 // Event storage structure
@@ -156,8 +162,8 @@ class LifeMatrix : public Component {
   void set_color_weekend(Color c) { color_weekend_ = c; }
   void set_color_marker(Color c) { color_marker_ = c; }
   void set_color_highlight(Color c) { color_highlight_ = c; }
-  void set_color_scheme(ColorScheme scheme) { color_scheme_ = scheme; }
-  void set_color_scheme(const std::string &scheme);
+  void set_style(int s) { style_ = (DisplayStyle)s; }
+  void set_style(const std::string &style);
   void set_gradient_type(GradientType type) { gradient_type_ = type; }
   void set_gradient_type(const std::string &type);
   void set_marker_style(MarkerStyle style) { marker_style_ = style; }
@@ -167,8 +173,8 @@ class LifeMatrix : public Component {
 
   // Year view configuration
   void set_year_events(const std::string &events);
-  void set_year_day_style(YearDayStyle style) { year_day_style_ = style; }
-  void set_year_day_style(const std::string &style);
+  void set_day_fill(DayFillStyle style) { day_fill_style_ = style; }
+  void set_day_fill(const std::string &style);
   void set_year_event_style(YearEventStyle style) { year_event_style_ = style; }
   void set_year_event_style(const std::string &style);
 
@@ -240,13 +246,13 @@ class LifeMatrix : public Component {
   // HA entity sync — register entities for bidirectional sync (called from YAML on_boot)
   void set_ha_complex_patterns(switch_::Switch *sw) { ha_complex_patterns_ = sw; }
   void set_ha_conway_speed(select::Select *s) { ha_conway_speed_ = s; }
-  void set_ha_color_scheme(select::Select *s) { ha_color_scheme_ = s; }
+  void set_ha_style(select::Select *s) { ha_style_ = s; }
   void set_ha_gradient_type(select::Select *s) { ha_gradient_type_ = s; }
   void set_ha_fill_direction(select::Select *s) { ha_fill_direction_ = s; }
   void set_ha_marker_style(select::Select *s) { ha_marker_style_ = s; }
   void set_ha_marker_color(select::Select *s) { ha_marker_color_ = s; }
   void set_ha_text_area_position(select::Select *s) { ha_text_area_position_ = s; }
-  void set_ha_year_day_style(select::Select *s) { ha_year_day_style_ = s; }
+  void set_ha_day_fill(select::Select *s) { ha_day_fill_ = s; }
   void set_ha_year_event_style(select::Select *s) { ha_year_event_style_ = s; }
   void set_ha_bed_time_hour(number::Number *n) { ha_bed_time_hour_ = n; }
   void set_ha_work_start_hour(number::Number *n) { ha_work_start_hour_ = n; }
@@ -277,14 +283,14 @@ class LifeMatrix : public Component {
   float screen_cycle_time_{3.0f};
   std::string text_area_position_{"Top"};
   bool fill_direction_bottom_to_top_{true};
-  ColorScheme color_scheme_{COLOR_TIME_SEGMENTS};
+  DisplayStyle style_{STYLE_TIME_SEGMENTS};
   GradientType gradient_type_{GRADIENT_RED_BLUE};
   MarkerStyle marker_style_{MARKER_SINGLE_DOT};
   MarkerColor marker_color_{MARKER_BLUE};
 
   // Year view configuration
   std::vector<YearEvent> year_events_;
-  YearDayStyle year_day_style_{YEAR_DAY_ACTIVITY_SCHEME};
+  DayFillStyle day_fill_style_{DAY_FILL_MIXED};
   YearEventStyle year_event_style_{YEAR_EVENT_MARKERS};
 
   // Screen management
@@ -302,6 +308,11 @@ class LifeMatrix : public Component {
   void render_game_of_life(display::Display &it, int viz_y, int viz_height);
   void render_big_bang_animation(display::Display &it, int viz_y, int viz_height);
   void render_ui_overlays(display::Display &it);
+  void check_celebration(ESPTime &time);
+  void render_celebration_overlay(display::Display &it, uint32_t elapsed_ms);
+  void render_sparkle_celebration(display::Display &it, uint32_t elapsed_ms);
+  void render_plasma_celebration(display::Display &it, uint32_t elapsed_ms);
+  Color get_complementary_color(Color c);
   Color hsv_to_rgb(int hue, float saturation, float value);
   Color get_gradient_color(float progress);
   Color get_time_segment_color(int hour);
@@ -351,6 +362,14 @@ class LifeMatrix : public Component {
   // Time segments configuration
   TimeSegmentsConfig time_segments_{22, 6, 9, 17};
 
+  // Celebration animation state
+  bool celebration_active_{false};
+  uint32_t celebration_start_{0};
+  uint8_t last_celebration_hour_{255};   // 255 = never fired
+  uint8_t last_celebration_day_{0};
+  uint8_t last_celebration_month_{0};
+  CelebrationStyle celebration_style_{CELEB_PLASMA};
+
   // OTA state
   bool ota_in_progress_{false};
   float ota_progress_{0.0f};
@@ -358,17 +377,18 @@ class LifeMatrix : public Component {
   // Time override for testing
   bool time_override_active_{false};
   ESPTime fake_time_{};
+  uint32_t time_override_start_ms_{0};
 
   // HA entity pointers for bidirectional sync
   switch_::Switch *ha_complex_patterns_{nullptr};
   select::Select *ha_conway_speed_{nullptr};
-  select::Select *ha_color_scheme_{nullptr};
+  select::Select *ha_style_{nullptr};
   select::Select *ha_gradient_type_{nullptr};
   select::Select *ha_fill_direction_{nullptr};
   select::Select *ha_marker_style_{nullptr};
   select::Select *ha_marker_color_{nullptr};
   select::Select *ha_text_area_position_{nullptr};
-  select::Select *ha_year_day_style_{nullptr};
+  select::Select *ha_day_fill_{nullptr};
   select::Select *ha_year_event_style_{nullptr};
   number::Number *ha_bed_time_hour_{nullptr};
   number::Number *ha_work_start_hour_{nullptr};

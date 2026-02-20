@@ -33,7 +33,7 @@ CONF_TIME_SEGMENTS = "time_segments"
 CONF_BED_TIME_HOUR = "bed_time_hour"
 CONF_WORK_START_HOUR = "work_start_hour"
 CONF_WORK_END_HOUR = "work_end_hour"
-CONF_COLOR_SCHEME = "color_scheme"
+CONF_STYLE = "style"
 CONF_GRADIENT_TYPE = "gradient_type"
 CONF_TEXT_AREA_POSITION = "text_area_position"
 CONF_FILL_DIRECTION = "fill_direction"
@@ -42,8 +42,8 @@ life_matrix_ns = cg.esphome_ns.namespace("life_matrix")
 LifeMatrix = life_matrix_ns.class_("LifeMatrix", cg.Component)
 
 # Enums
-ColorScheme = life_matrix_ns.enum("ColorScheme")
-COLOR_SCHEMES = {
+DisplayStyle = life_matrix_ns.enum("DisplayStyle")
+DISPLAY_STYLES = {
     "Single Color": 0,
     "Gradient": 1,
     "Time Segments": 2,
@@ -104,7 +104,7 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_TIME_SEGMENTS): TIME_SEGMENTS_SCHEMA,
 
     # Visual styling
-    cv.Optional(CONF_COLOR_SCHEME, default="Single Color"): cv.enum(COLOR_SCHEMES, upper=False),
+    cv.Optional(CONF_STYLE, default="Single Color"): cv.enum(DISPLAY_STYLES, upper=False),
     cv.Optional(CONF_GRADIENT_TYPE, default="Red-Blue"): cv.string,
     cv.Optional(CONF_TEXT_AREA_POSITION, default="Top"): cv.one_of("Top", "Bottom", "None", upper=False),
     cv.Optional(CONF_FILL_DIRECTION, default="Bottom to Top"): cv.one_of("Bottom to Top", "Top to Bottom", upper=False),
@@ -184,6 +184,7 @@ async def to_code(config):
         # A proper struct would require more C++ code generation
 
     # Visual styling
+    cg.add(var.set_style(config[CONF_STYLE]))
     cg.add(var.set_text_area_position(config[CONF_TEXT_AREA_POSITION]))
     cg.add(var.set_fill_direction(config[CONF_FILL_DIRECTION]))
     cg.add(var.set_gradient_type(config[CONF_GRADIENT_TYPE]))
