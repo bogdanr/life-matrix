@@ -3128,8 +3128,14 @@ void LifeMatrix::render_lifespan_view(display::Display &it, ESPTime &time, int v
         base_color = get_phase_color(highlighted_phase);
       else
         base_color = Color(8, 8, 8);  // very dim when not in highlighted phase
-    } else {
+    } else if (style_ == STYLE_TIME_SEGMENTS) {
       base_color = blend_phase_colors(phase_mask);
+    } else if (style_ == STYLE_GRADIENT) {
+      base_color = interpolate_gradient((float)age / (float)le_age, gradient_type_);
+    } else if (style_ == STYLE_RAINBOW) {
+      base_color = hsv_to_rgb((age * 360) / le_age, 1.0f, 1.0f);
+    } else {
+      base_color = color_active_;  // STYLE_SINGLE
     }
 
     // Present pixel x within current year (1–31)
