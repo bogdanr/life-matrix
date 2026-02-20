@@ -97,6 +97,10 @@ life_matrix:
     work_end_hour: 17
 
   # Lifespan biographical data (all optional except birthday)
+  # Date format: YYYY-MM-DD
+  # Range format: YYYY-MM-DD/YYYY-MM-DD (start/end, with "/" separator)
+  #   Omit end date for ongoing ranges (still alive, still together, etc.)
+  #   Comma-separate multiple entries
   lifespan:
     birthday: "1990-05-15"         # Required for lifespan screen
     moved_out: 18                  # Age when you left home (default: 18)
@@ -105,11 +109,11 @@ life_matrix:
     life_expectancy_age: 90        # Expected lifespan (default: 90)
     phase_cycle_time: 3            # Phase color animation speed in seconds (0 = static)
     kids: "2018-03-10,2021-07-22"  # Comma-separated birth dates
-    parents: "2015-11-03"          # Comma-separated death dates
-    siblings: ""
-    partner_ranges: "2012-2016"    # Ranges: YYYY-YYYY or YYYY-present
-    marriage_ranges: "2016-present"
-    milestones: "2012-06-15 Graduated,2016-09-01 New job"  # date label pairs
+    parents: "1955-04-12,1958-09-03"  # Parent birth dates; add /death: "1955-04-12/2020-11-30"
+    siblings: "1985-03-15"         # Comma-separated sibling birth dates
+    partner_ranges: "2012-06-01/2016-08-31,2018-03-15"  # Ranges; omit end if ongoing
+    marriage_ranges: "2018-09-22"  # Ongoing marriage (no end date)
+    milestones: "2012-06-15:Graduated,2016-09-01:New job"  # YYYY-MM-DD:label pairs
 
   # Visual styling
   style: "Time Segments"          # Single Color | Gradient | Time Segments | Rainbow
@@ -125,7 +129,7 @@ The component exposes entities for full remote control via Home Assistant:
 - **Switches** — toggle individual screens on/off (including Lifespan), complex GoL patterns
 - **Selects** — style, gradient type, fill direction, marker style, marker color, year day/event style, Game of Life speed
 - **Numbers** — brightness, bed time, work hours, screen cycle time, lifespan ages (moved out, school years, retirement, life expectancy, phase cycle time)
-- **Text inputs** — year events (comma-separated dates), lifespan biographical data (birthday, kids, parents, siblings, milestones), time override for testing
+- **Text inputs** — year events (comma-separated dates), lifespan biographical data (birthday, kids birth dates, parents birth/death ranges, siblings birth dates, partner/marriage date ranges, milestones), time override for testing
 - **Sensors** — GoL final generation/population, heap free, loop time
 
 See [`example-full.yaml`](example-full.yaml) for a complete working configuration with all entities.

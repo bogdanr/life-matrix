@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Four star types (bright white, white, blue-white, amber) across full width (columns 0–31)
   - Near-black nebula background with blue→indigo depth gradient
 - **Lifespan web interface entities** — all biographical fields configurable via HA dashboard without reflashing
-  - Text inputs: birthday, kids, parents lost, siblings lost, milestones (date formats)
+  - Text inputs: birthday, kids birth dates, parents birth/death ranges, siblings birth dates, partner/marriage date ranges, milestones
   - Number inputs: moved out age (14–40), school years (8–25), retirement age (50–90), life expectancy (40–110), phase cycle time (0–30 s)
 - **Month view rewrite** — 4×8 day grid with activity fill, event borders, and today indicator
 - Current-time progress row in today's cell (left/elapsed portion at full brightness)

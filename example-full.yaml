@@ -39,6 +39,8 @@ esphome:
             id(life_matrix_component)->set_lifespan_parents(id(ls_parents).state.c_str());
             id(life_matrix_component)->set_lifespan_siblings(id(ls_siblings).state.c_str());
             id(life_matrix_component)->set_lifespan_milestones(id(ls_milestones).state.c_str());
+            id(life_matrix_component)->set_lifespan_partner_ranges(id(ls_partner_ranges).state.c_str());
+            id(life_matrix_component)->set_lifespan_marriage_ranges(id(ls_marriage_ranges).state.c_str());
             id(life_matrix_component)->set_lifespan_moved_out_age((int)id(ls_moved_out).state);
             id(life_matrix_component)->set_lifespan_school_years((int)id(ls_school_years).state);
             id(life_matrix_component)->set_lifespan_retirement_age((int)id(ls_retirement).state);
@@ -275,9 +277,10 @@ text:
           id(life_matrix_component)->refresh_lifespan();
 
   - platform: template
-    name: "Parents Lost (YYYY-MM-DD,...)"
+    # Format: "YYYY-MM-DD" (birth only) or "YYYY-MM-DD/YYYY-MM-DD" (birth/death), comma-separated, max 2
+    name: "Parents (birth or birth/death ranges)"
     id: ls_parents
-    icon: "mdi:account-multiple"
+    icon: "mdi:human-male-female"
     entity_category: config
     optimistic: true
     mode: text
@@ -288,7 +291,7 @@ text:
           id(life_matrix_component)->refresh_lifespan();
 
   - platform: template
-    name: "Siblings Lost (YYYY-MM-DD,...)"
+    name: "Siblings' Birthdays (YYYY-MM-DD,...)"
     id: ls_siblings
     icon: "mdi:account-group"
     entity_category: config
@@ -298,6 +301,33 @@ text:
     on_value:
       - lambda: |-
           id(life_matrix_component)->set_lifespan_siblings(x.c_str());
+          id(life_matrix_component)->refresh_lifespan();
+
+  - platform: template
+    # Format: "YYYY-MM-DD" (ongoing) or "YYYY-MM-DD/YYYY-MM-DD" (ended), comma-separated
+    name: "Living with Partner (date ranges)"
+    id: ls_partner_ranges
+    icon: "mdi:home-heart"
+    entity_category: config
+    optimistic: true
+    mode: text
+    initial_value: ""
+    on_value:
+      - lambda: |-
+          id(life_matrix_component)->set_lifespan_partner_ranges(x.c_str());
+          id(life_matrix_component)->refresh_lifespan();
+
+  - platform: template
+    name: "Marriage (date ranges)"
+    id: ls_marriage_ranges
+    icon: "mdi:ring"
+    entity_category: config
+    optimistic: true
+    mode: text
+    initial_value: ""
+    on_value:
+      - lambda: |-
+          id(life_matrix_component)->set_lifespan_marriage_ranges(x.c_str());
           id(life_matrix_component)->refresh_lifespan();
 
   - platform: template
