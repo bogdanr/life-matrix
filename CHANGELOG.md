@@ -5,7 +5,37 @@ All notable changes to the Life Matrix component will be documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-02-21
+
+### Added
+- **Lifespan screen** (screen ID 5, Game of Life moved to ID 6) — biographical life visualization
+  - Life phases rendered per-row: Parents home, School (primary/highschool/university split), Career, Retirement
+  - Relationship markers: kids, parents lost, siblings lost, partner ranges, marriage ranges, milestones
+  - Decade tick markers using the Marker Color setting; event/milestone markers use complementary color of current phase blend (matching year view behavior)
+  - Phase color animation with configurable cycle time
+  - Celebration animations (sparkle + plasma) on significant event days
+- **Cosmos death visualization** — starfield with nebula gradient for rows beyond life expectancy
+  - Per-pixel deterministic star hash with sinf-based independent twinkle
+  - Four star types (bright white, white, blue-white, amber) across full width (columns 0–31)
+  - Near-black nebula background with blue→indigo depth gradient
+- **Lifespan web interface entities** — all biographical fields configurable via HA dashboard without reflashing
+  - Text inputs: birthday, kids, parents lost, siblings lost, milestones (date formats)
+  - Number inputs: moved out age (14–40), school years (8–25), retirement age (50–90), life expectancy (40–110), phase cycle time (0–30 s)
+- **Month view rewrite** — 4×8 day grid with activity fill, event borders, and today indicator
+- Current-time progress row in today's cell (left/elapsed portion at full brightness)
+- European Mon–Sun week coloring for Time Segments style in month view
+- Marker style "None" suppresses the today rectangle in month view
+- Month view settings accessible from the physical settings menu
+
+### Changed
+- Screen IDs renumbered: Lifespan=5, Game of Life=6 (previously GoL was screen 5)
+- Life expectancy default increased from 80 to 90 years
+- `moved_out`, `school_years`, `retirement` are now integer ages, not date strings
+- Removed life-end orange marker line; cosmos visualization occupies all 32 columns
+- `is_grave` threshold changed to `age >= life_expectancy_age` (inclusive)
+
+### Fixed
+- "Set bday" prompt now fits on screen (split across two lines)
 
 ## [1.0.0] - 2026-02-20
 
@@ -195,35 +225,9 @@ N/A - Initial release
 
 ---
 
-## [Unreleased]
-
-### Planned for v1.1.0
-- [ ] Complete year view with event parsing
-- [ ] Hour view spiral filling algorithm
-- [ ] Habits tracking implementation
-- [ ] Home Assistant entity publication (generation, population, ui_mode)
-- [ ] Actions: `life_matrix.reset_game`, `life_matrix.next_screen`, etc.
-- [ ] Template sensors for statistics
-
-### Planned for v1.2.0
-- [ ] Accelerometer integration (shake-to-reset)
-- [ ] Pixel art / drawing mode
-- [ ] Tilt physics effects
-- [ ] Pomodoro timer screen
-
-### Future Considerations
-- [ ] Multiple Game of Life rule sets (not just Conway)
-- [ ] Save/load game states
-- [ ] Pattern library browser
-- [ ] Web-based configuration UI
-- [ ] MQTT integration for remote control
-- [ ] Animation library for transitions
-- [ ] Custom font support improvements
-
----
-
 ## Version History
 
+- **v1.1.0** (2026-02-21): Lifespan screen, cosmos visualization, month view rewrite, HA lifespan entities
 - **v1.0.0** (2026-02-20): First stable release
 - **v1.0.0-beta.1–beta.3** (2026-02-16–17): Initial component extraction and stabilization
 - **v0.x.x** (2025-2026): Monolithic YAML implementation (pre-component)

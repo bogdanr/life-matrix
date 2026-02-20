@@ -29,7 +29,22 @@ esphome:
             id(life_matrix_component)->register_screen(1, id(show_month).state);
             id(life_matrix_component)->register_screen(2, id(show_day).state);
             id(life_matrix_component)->register_screen(3, id(show_hour).state);
-            id(life_matrix_component)->register_screen(5, id(show_conway).state);
+            id(life_matrix_component)->register_screen(4, true);  // habits always on
+            id(life_matrix_component)->register_screen(5, id(show_lifespan).state);
+            id(life_matrix_component)->register_screen(6, id(show_conway).state);
+
+            // Push lifespan biographical data to component
+            id(life_matrix_component)->set_lifespan_birthday(id(ls_birthday).state.c_str());
+            id(life_matrix_component)->set_lifespan_kids(id(ls_kids).state.c_str());
+            id(life_matrix_component)->set_lifespan_parents(id(ls_parents).state.c_str());
+            id(life_matrix_component)->set_lifespan_siblings(id(ls_siblings).state.c_str());
+            id(life_matrix_component)->set_lifespan_milestones(id(ls_milestones).state.c_str());
+            id(life_matrix_component)->set_lifespan_moved_out_age((int)id(ls_moved_out).state);
+            id(life_matrix_component)->set_lifespan_school_years((int)id(ls_school_years).state);
+            id(life_matrix_component)->set_lifespan_retirement_age((int)id(ls_retirement).state);
+            id(life_matrix_component)->set_lifespan_life_expectancy((int)id(ls_life_expectancy).state);
+            id(life_matrix_component)->set_lifespan_phase_cycle((float)id(ls_phase_cycle).state);
+            id(life_matrix_component)->refresh_lifespan();
 
             // Register HA entities for bidirectional sync (physical UI → HA)
             id(life_matrix_component)->set_ha_complex_patterns(id(gol_complex_patterns));
@@ -176,9 +191,9 @@ switch:
       - lambda: id(life_matrix_component)->register_screen(3, false);
 
   - platform: template
-    name: "Show Game of Life"
-    id: show_conway
-    icon: "mdi:grid"
+    name: "Show Lifespan View"
+    id: show_lifespan
+    icon: "mdi:timeline-clock"
     entity_category: config
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
@@ -186,6 +201,18 @@ switch:
       - lambda: id(life_matrix_component)->register_screen(5, true);
     on_turn_off:
       - lambda: id(life_matrix_component)->register_screen(5, false);
+
+  - platform: template
+    name: "Show Game of Life"
+    id: show_conway
+    icon: "mdi:grid"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - lambda: id(life_matrix_component)->register_screen(6, true);
+    on_turn_off:
+      - lambda: id(life_matrix_component)->register_screen(6, false);
 
   - platform: template
     name: "Complex Patterns"
@@ -219,6 +246,72 @@ text:
     initial_value: ""
     on_value:
       - lambda: id(life_matrix_component)->set_year_events(x);
+
+  # ---- Lifespan biographical inputs ----
+  - platform: template
+    name: "Birthday (YYYY-MM-DD)"
+    id: ls_birthday
+    icon: "mdi:cake-variant"
+    entity_category: config
+    optimistic: true
+    mode: text
+    initial_value: ""
+    on_value:
+      - lambda: |-
+          id(life_matrix_component)->set_lifespan_birthday(x.c_str());
+          id(life_matrix_component)->refresh_lifespan();
+
+  - platform: template
+    name: "Kids (YYYY-MM-DD,...)"
+    id: ls_kids
+    icon: "mdi:baby-carriage"
+    entity_category: config
+    optimistic: true
+    mode: text
+    initial_value: ""
+    on_value:
+      - lambda: |-
+          id(life_matrix_component)->set_lifespan_kids(x.c_str());
+          id(life_matrix_component)->refresh_lifespan();
+
+  - platform: template
+    name: "Parents Lost (YYYY-MM-DD,...)"
+    id: ls_parents
+    icon: "mdi:account-multiple"
+    entity_category: config
+    optimistic: true
+    mode: text
+    initial_value: ""
+    on_value:
+      - lambda: |-
+          id(life_matrix_component)->set_lifespan_parents(x.c_str());
+          id(life_matrix_component)->refresh_lifespan();
+
+  - platform: template
+    name: "Siblings Lost (YYYY-MM-DD,...)"
+    id: ls_siblings
+    icon: "mdi:account-group"
+    entity_category: config
+    optimistic: true
+    mode: text
+    initial_value: ""
+    on_value:
+      - lambda: |-
+          id(life_matrix_component)->set_lifespan_siblings(x.c_str());
+          id(life_matrix_component)->refresh_lifespan();
+
+  - platform: template
+    name: "Milestones (YYYY-MM-DD label,...)"
+    id: ls_milestones
+    icon: "mdi:flag-checkered"
+    entity_category: config
+    optimistic: true
+    mode: text
+    initial_value: ""
+    on_value:
+      - lambda: |-
+          id(life_matrix_component)->set_lifespan_milestones(x.c_str());
+          id(life_matrix_component)->refresh_lifespan();
 
   - platform: template
     name: "Time Override (Testing)"
@@ -459,6 +552,92 @@ number:
     on_value:
       - lambda: id(life_matrix_component)->set_screen_cycle_time(x);
 
+  # ---- Lifespan age settings ----
+  - platform: template
+    name: "Moved Out Age"
+    id: ls_moved_out
+    icon: "mdi:home-export-outline"
+    entity_category: config
+    min_value: 14
+    max_value: 40
+    step: 1
+    initial_value: 18
+    unit_of_measurement: "yr"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          id(life_matrix_component)->set_lifespan_moved_out_age((int)x);
+          id(life_matrix_component)->refresh_lifespan();
+
+  - platform: template
+    name: "School Years"
+    id: ls_school_years
+    icon: "mdi:school"
+    entity_category: config
+    min_value: 8
+    max_value: 25
+    step: 1
+    initial_value: 12
+    unit_of_measurement: "yr"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          id(life_matrix_component)->set_lifespan_school_years((int)x);
+          id(life_matrix_component)->refresh_lifespan();
+
+  - platform: template
+    name: "Retirement Age"
+    id: ls_retirement
+    icon: "mdi:beach"
+    entity_category: config
+    min_value: 50
+    max_value: 90
+    step: 1
+    initial_value: 70
+    unit_of_measurement: "yr"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          id(life_matrix_component)->set_lifespan_retirement_age((int)x);
+          id(life_matrix_component)->refresh_lifespan();
+
+  - platform: template
+    name: "Life Expectancy"
+    id: ls_life_expectancy
+    icon: "mdi:heart-pulse"
+    entity_category: config
+    min_value: 40
+    max_value: 110
+    step: 1
+    initial_value: 90
+    unit_of_measurement: "yr"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          id(life_matrix_component)->set_lifespan_life_expectancy((int)x);
+          id(life_matrix_component)->refresh_lifespan();
+
+  - platform: template
+    name: "Phase Cycle Time"
+    id: ls_phase_cycle
+    icon: "mdi:timer-sync"
+    entity_category: config
+    min_value: 0
+    max_value: 30
+    step: 1
+    initial_value: 3
+    unit_of_measurement: "s"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: |-
+          id(life_matrix_component)->set_lifespan_phase_cycle((float)x);
+          id(life_matrix_component)->refresh_lifespan();
+
   - platform: template
     name: "Brightness"
     id: display_brightness
@@ -640,7 +819,7 @@ binary_sensor:
       mode: INPUT_PULLUP
     on_press:
       - lambda: |-
-          if (id(life_matrix_component)->get_current_screen_id() == 5) {
+          if (id(life_matrix_component)->get_current_screen_id() == 6) {
             id(life_matrix_component)->reset_game_of_life();
           }
       - light.turn_on: red_led
@@ -772,6 +951,9 @@ life_matrix:
 
   # Screens are controlled via HA switches above, not here.
   # This allows per-screen enabled state to persist across reboots.
+  # Lifespan data is controlled via HA text/number entities above.
+  # To use static YAML configuration instead, add a lifespan: block here
+  # (see README.md for the full lifespan configuration reference).
 
   game_of_life:
     update_interval: 200ms
