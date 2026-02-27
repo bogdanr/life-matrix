@@ -69,6 +69,9 @@ void LifeMatrix::loop() {
     }
   }
 
+  // Update Pomodoro timer
+  update_pomodoro();
+
   // Update screen cycling
   update_screen_cycle();
 
@@ -475,6 +478,8 @@ void LifeMatrix::next_settings_cursor() {
     max_cursor = 6;  // 3 global + 4 month settings (style, fill dir, day fill, marker color)
   } else if (screen_id == SCREEN_YEAR) {
     max_cursor = 6;  // 3 global + 4 year settings
+  } else if (screen_id == SCREEN_POMODORO) {
+    max_cursor = 6;  // 3 global + 4 pomodoro settings (style, grad, preset, rounds)
   }
 
   settings_cursor_ = (settings_cursor_ + 1) % (max_cursor + 1);
@@ -500,6 +505,8 @@ void LifeMatrix::prev_settings_cursor() {
     max_cursor = 6;  // 3 global + 4 month settings (style, fill dir, day fill, marker color)
   } else if (screen_id == SCREEN_YEAR) {
     max_cursor = 6;
+  } else if (screen_id == SCREEN_POMODORO) {
+    max_cursor = 6;  // 3 global + 4 pomodoro settings (style, grad, preset, rounds)
   }
 
   settings_cursor_ = (settings_cursor_ - 1 + max_cursor + 1) % (max_cursor + 1);
@@ -672,6 +679,28 @@ void LifeMatrix::adjust_setting(int direction) {
         if (ha_year_event_style_) ha_year_event_style_->publish_state(yes_name);
         ESP_LOGD(TAG, "Year event style: %d", (int)year_event_style_);
       }
+    } else if (screen_id == SCREEN_POMODORO) {
+      static const char* const pomo_preset_names[] = {
+        "Classic (25/5)", "Deep Work (50/10)", "Ultradian (90/20)"};
+      if (local == 0) {
+        style_ = (DisplayStyle)cycle_enum((int)style_, 3);
+        if (ha_style_) ha_style_->publish_state(cs_names[style_]);
+        ESP_LOGD(TAG, "Pomo style: %d", (int)style_);
+      } else if (local == 1) {
+        gradient_type_ = (GradientType)cycle_enum((int)gradient_type_, 4);
+        if (ha_gradient_type_) ha_gradient_type_->publish_state(gt_names[gradient_type_]);
+        ESP_LOGD(TAG, "Pomo gradient: %d", (int)gradient_type_);
+      } else if (local == 2) {
+        pomo_preset_ = (PomodoroPreset)cycle_enum((int)pomo_preset_, 2);
+        if (ha_pomo_preset_) ha_pomo_preset_->publish_state(pomo_preset_names[pomo_preset_]);
+        ESP_LOGD(TAG, "Pomo preset: %d", (int)pomo_preset_);
+      } else if (local == 3) {
+        pomo_rounds_before_long_break_ += direction;
+        if (pomo_rounds_before_long_break_ < 2) pomo_rounds_before_long_break_ = 8;
+        if (pomo_rounds_before_long_break_ > 8) pomo_rounds_before_long_break_ = 2;
+        if (ha_pomo_rounds_) ha_pomo_rounds_->publish_state((float)pomo_rounds_before_long_break_);
+        ESP_LOGD(TAG, "Pomo rounds: %d", pomo_rounds_before_long_break_);
+      }
     }
   }
 
@@ -713,6 +742,11 @@ std::string LifeMatrix::get_current_setting_name() {
     if (local == 1) return "Mark";
     if (local == 2) return "DFill";
     if (local == 3) return "Event";
+  } else if (screen_id == SCREEN_POMODORO) {
+    if (local == 0) return "Style";
+    if (local == 1) return "Grad";
+    if (local == 2) return "Prset";
+    if (local == 3) return "Rnds";
   }
   return "?";
 }
@@ -832,6 +866,27 @@ std::string LifeMatrix::get_current_setting_value() {
       if (year_event_style_ == YEAR_EVENT_PULSE) return "Pulse";
       if (year_event_style_ == YEAR_EVENT_MARKERS) return "Marks";
     }
+  } else if (screen_id == SCREEN_POMODORO) {
+    if (local == 0) {
+      if (style_ == STYLE_SINGLE) return "Singl";
+      if (style_ == STYLE_GRADIENT) return "Gradt";
+      if (style_ == STYLE_TIME_SEGMENTS) return "TmSeg";
+      if (style_ == STYLE_RAINBOW) return "Rainb";
+    } else if (local == 1) {
+      if (gradient_type_ == GRADIENT_RED_BLUE) return "RedBl";
+      if (gradient_type_ == GRADIENT_GREEN_YELLOW) return "GrnYl";
+      if (gradient_type_ == GRADIENT_CYAN_MAGENTA) return "CynMg";
+      if (gradient_type_ == GRADIENT_PURPLE_ORANGE) return "PurOr";
+      if (gradient_type_ == GRADIENT_BLUE_YELLOW) return "BluYl";
+    } else if (local == 2) {
+      if (pomo_preset_ == POMO_PRESET_CLASSIC) return "25-5";
+      if (pomo_preset_ == POMO_PRESET_DEEP_WORK) return "50-10";
+      if (pomo_preset_ == POMO_PRESET_ULTRADIAN) return "90-20";
+    } else if (local == 3) {
+      char buf[4];
+      snprintf(buf, sizeof(buf), "%d", pomo_rounds_before_long_break_);
+      return buf;
+    }
   }
   return "?";
 }
@@ -866,7 +921,8 @@ void LifeMatrix::register_screen(int screen_id, bool enabled) {
       case SCREEN_HOUR: config.name = "Hour"; break;
       case SCREEN_HABITS: config.name = "Habits"; break;
       case SCREEN_GAME_OF_LIFE: config.name = "Conway"; break;
-      case SCREEN_LIFESPAN:     config.name = "Life"; break;
+      case SCREEN_LIFESPAN:  config.name = "Life"; break;
+      case SCREEN_POMODORO:  config.name = "Pomo"; break;
       default: config.name = "Unknown"; break;
     }
 
@@ -882,7 +938,13 @@ void LifeMatrix::register_screen(int screen_id, bool enabled) {
     }
   }
 
-  // If current screen was disabled, switch to another enabled screen
+  // Clamp current_screen_idx_ immediately after rebuilding — prevents one-frame "No views" flash
+  if (!enabled_screen_ids_.empty() && current_screen_idx_ >= (int)enabled_screen_ids_.size()) {
+    current_screen_idx_ = (int)enabled_screen_ids_.size() - 1;
+    ESP_LOGD(TAG, "Clamped current_screen_idx_ to %d after disable", current_screen_idx_);
+  }
+
+  // If current screen was disabled, switch to first enabled screen
   if (!enabled && get_current_screen_id() == screen_id && !enabled_screen_ids_.empty()) {
     current_screen_idx_ = 0;
     ESP_LOGD(TAG, "Current screen was disabled, switching to screen ID %d", get_current_screen_id());
@@ -1063,6 +1125,7 @@ void LifeMatrix::render(display::Display &it, ESPTime &time) {
 
   // Get current screen to render
   int screen_id = get_current_screen_id();
+
   if (screen_id < 0) {
     // No screens enabled
     int center_x = it.get_width() / 2;
@@ -1110,6 +1173,9 @@ void LifeMatrix::render(display::Display &it, ESPTime &time) {
     case SCREEN_LIFESPAN:
       render_lifespan_view(it, display_time, vp.viz_y, vp.viz_height);
       break;
+    case SCREEN_POMODORO:
+      render_pomodoro_view(it, display_time, vp);
+      break;
     case SCREEN_HABITS:
       // Placeholder for habits screen
       {
@@ -1124,7 +1190,8 @@ void LifeMatrix::render(display::Display &it, ESPTime &time) {
   // Celebration sequence: advance phases, draw overlays for styles that need them
   if (celebration_active_) {
     bool is_time_screen = (screen_id == SCREEN_HOUR || screen_id == SCREEN_DAY ||
-                           screen_id == SCREEN_MONTH || screen_id == SCREEN_YEAR);
+                           screen_id == SCREEN_MONTH || screen_id == SCREEN_YEAR ||
+                           screen_id == SCREEN_POMODORO);
     uint32_t elapsed = (uint32_t)(millis() - celebration_start_);
     CelebrationStyle cur_style = celeb_sequence_[celeb_seq_idx_];
     uint32_t cur_dur = get_celeb_duration(cur_style);
@@ -3218,6 +3285,641 @@ void LifeMatrix::render_lifespan_view(display::Display &it, ESPTime &time, int v
                  color_active_, display::TextAlign::CENTER, buf);
       }
     }
+  }
+}
+
+// ============================================================================
+// POMODORO TIMER IMPLEMENTATION
+// ============================================================================
+
+PomodoroPresetConfig LifeMatrix::get_preset_config() const {
+  switch (pomo_preset_) {
+    case POMO_PRESET_DEEP_WORK:  return {50, 10, 20};
+    case POMO_PRESET_ULTRADIAN:  return {90, 20, 30};
+    default:                     return {25,  5, 15};  // Classic
+  }
+}
+
+int LifeMatrix::get_pomo_elapsed_sec() const {
+  if (pomo_phase_ == POMO_IDLE || pomo_phase_ == POMO_COMPLETE) return 0;
+  unsigned long now = millis();
+  unsigned long elapsed_ms;
+  if (pomo_paused_) {
+    elapsed_ms = pomo_pause_start_ms_ - pomo_phase_start_ms_ - pomo_paused_total_ms_;
+  } else {
+    elapsed_ms = now - pomo_phase_start_ms_ - pomo_paused_total_ms_;
+  }
+  return (int)(elapsed_ms / 1000UL);
+}
+
+int LifeMatrix::get_pomo_total_sec() const {
+  PomodoroPresetConfig cfg = get_preset_config();
+  switch (pomo_phase_) {
+    case POMO_WORK:       return cfg.work_min * 60;
+    case POMO_BREAK:      return cfg.break_min * 60;
+    case POMO_LONG_BREAK: return cfg.long_break_min * 60;
+    default:              return cfg.work_min * 60;
+  }
+}
+
+int LifeMatrix::get_session_elapsed_sec() const {
+  if (pomo_phase_ == POMO_IDLE) return 0;
+  if (pomo_phase_ == POMO_COMPLETE) {
+    // Return total session time so the spiral shows fully filled on completion
+    PomodoroPresetConfig cfg = get_preset_config();
+    int n = pomo_rounds_before_long_break_;
+    return n * cfg.work_min * 60 + (n - 1) * cfg.break_min * 60 + cfg.long_break_min * 60;
+  }
+  return pomo_session_elapsed_at_phase_start_sec_ + get_pomo_elapsed_sec();
+}
+
+void LifeMatrix::start_pomodoro() {
+  pomo_phase_ = POMO_WORK;
+  pomo_phase_start_ms_ = millis();
+  pomo_paused_total_ms_ = 0;
+  pomo_paused_ = false;
+  pomo_completed_rounds_ = 0;
+  pomo_session_elapsed_at_phase_start_sec_ = 0;
+  exercise_snack_.ui_visible = false;
+  if (pomo_event_sensor_) pomo_event_sensor_->publish_state("work_started");
+  ESP_LOGD(TAG, "Pomodoro started (preset %d, %d rounds)", (int)pomo_preset_, pomo_rounds_before_long_break_);
+}
+
+void LifeMatrix::pause_pomodoro() {
+  if (pomo_paused_ || pomo_phase_ == POMO_IDLE || pomo_phase_ == POMO_COMPLETE) return;
+  pomo_paused_ = true;
+  pomo_pause_start_ms_ = millis();
+  ESP_LOGD(TAG, "Pomodoro paused");
+}
+
+void LifeMatrix::resume_pomodoro() {
+  if (!pomo_paused_) return;
+  pomo_paused_total_ms_ += millis() - pomo_pause_start_ms_;
+  pomo_paused_ = false;
+  ESP_LOGD(TAG, "Pomodoro resumed");
+}
+
+void LifeMatrix::reset_pomodoro() {
+  pomo_phase_ = POMO_IDLE;
+  pomo_completed_rounds_ = 0;
+  pomo_paused_ = false;
+  pomo_paused_total_ms_ = 0;
+  pomo_session_elapsed_at_phase_start_sec_ = 0;
+  pomo_work_done_anim_end_ms_ = 0;
+  exercise_snack_.ui_visible = false;
+  if (pomo_event_sensor_) pomo_event_sensor_->publish_state("idle");
+  ESP_LOGD(TAG, "Pomodoro reset");
+}
+
+void LifeMatrix::skip_pomodoro_phase() {
+  if (pomo_phase_ == POMO_IDLE) {
+    start_pomodoro();
+  } else {
+    advance_pomodoro_phase();
+  }
+}
+
+void LifeMatrix::advance_pomodoro_phase() {
+  // Accumulate session elapsed BEFORE resetting phase timing so the spiral stays continuous
+  pomo_session_elapsed_at_phase_start_sec_ += get_pomo_elapsed_sec();
+  pomo_phase_start_ms_ = millis();
+  pomo_paused_total_ms_ = 0;
+  pomo_paused_ = false;
+
+  if (pomo_phase_ == POMO_WORK) {
+    pomo_completed_rounds_++;
+    pomo_work_done_anim_end_ms_ = millis() + 2000;
+    ESP_LOGD(TAG, "Work done, completed rounds: %d / %d", pomo_completed_rounds_, pomo_rounds_before_long_break_);
+
+    // Show exercise snack at break start
+    if (exercise_snacks_enabled_ && !exercise_list_.empty()) {
+      exercise_snack_.exercise_idx = std::rand() % (int)exercise_list_.size();
+      exercise_snack_.rep_count = 10;
+      exercise_snack_.ui_visible = true;
+      exercise_snack_.ui_start_ms = millis();
+    }
+
+    if (pomo_completed_rounds_ >= pomo_rounds_before_long_break_) {
+      pomo_phase_ = POMO_LONG_BREAK;
+      if (pomo_event_sensor_) pomo_event_sensor_->publish_state("long_break_started");
+      // Trigger sparkle celebration for long break
+      celebration_active_ = true;
+      celebration_start_ = millis();
+      celeb_seq_idx_ = 0;
+      ctm_ = CTM_NONE;
+    } else {
+      pomo_phase_ = POMO_BREAK;
+      if (pomo_event_sensor_) pomo_event_sensor_->publish_state("break_started");
+      // Trigger sparkle celebration for regular break
+      celebration_active_ = true;
+      celebration_start_ = millis();
+      celeb_seq_idx_ = 0;
+      ctm_ = CTM_NONE;
+    }
+
+  } else if (pomo_phase_ == POMO_BREAK) {
+    pomo_phase_ = POMO_WORK;
+    if (pomo_event_sensor_) pomo_event_sensor_->publish_state("work_started");
+
+  } else if (pomo_phase_ == POMO_LONG_BREAK) {
+    pomo_phase_ = POMO_COMPLETE;
+    if (pomo_event_sensor_) pomo_event_sensor_->publish_state("session_complete");
+    // Trigger sparkle for session complete
+    celebration_active_ = true;
+    celebration_start_ = millis();
+    celeb_seq_idx_ = 0;
+    ctm_ = CTM_NONE;
+
+  } else if (pomo_phase_ == POMO_COMPLETE) {
+    reset_pomodoro();
+  }
+}
+
+void LifeMatrix::update_pomodoro() {
+  if (pomo_phase_ == POMO_IDLE) return;
+
+  // Auto-clear POMO_COMPLETE after 5 seconds
+  if (pomo_phase_ == POMO_COMPLETE) {
+    if ((millis() - pomo_phase_start_ms_) >= 5000UL) {
+      reset_pomodoro();
+    }
+    return;
+  }
+
+  if (pomo_paused_) return;
+
+  int elapsed = get_pomo_elapsed_sec();
+  int total = get_pomo_total_sec();
+
+  if (elapsed >= total) {
+    advance_pomodoro_phase();
+  }
+
+  // Auto-dismiss exercise UI after 45 seconds
+  if (exercise_snack_.ui_visible) {
+    if ((millis() - exercise_snack_.ui_start_ms) >= 45000UL) {
+      exercise_snack_.ui_visible = false;
+    }
+  }
+}
+
+void LifeMatrix::log_exercise_snack() {
+  if (!exercise_list_.empty() && exercise_snack_.exercise_idx < (int)exercise_list_.size()) {
+    std::string result = exercise_list_[exercise_snack_.exercise_idx] + ":" +
+                         std::to_string(exercise_snack_.rep_count);
+    if (pomo_exercise_sensor_) pomo_exercise_sensor_->publish_state(result);
+    ESP_LOGD(TAG, "Exercise snack logged: %s", result.c_str());
+  }
+  exercise_snack_.ui_visible = false;
+}
+
+void LifeMatrix::exercise_adjust_reps(int delta) {
+  exercise_snack_.rep_count += delta;
+  if (exercise_snack_.rep_count < 0) exercise_snack_.rep_count = 0;
+  if (exercise_snack_.rep_count > 100) exercise_snack_.rep_count = 100;
+  exercise_snack_.ui_start_ms = millis();  // Reset auto-dismiss timer
+}
+
+void LifeMatrix::exercise_next() {
+  if (exercise_list_.empty()) return;
+  exercise_snack_.exercise_idx = (exercise_snack_.exercise_idx + 1) % (int)exercise_list_.size();
+  exercise_snack_.rep_count = 10;
+  exercise_snack_.ui_start_ms = millis();
+}
+
+void LifeMatrix::exercise_prev() {
+  if (exercise_list_.empty()) return;
+  int sz = (int)exercise_list_.size();
+  exercise_snack_.exercise_idx = (exercise_snack_.exercise_idx - 1 + sz) % sz;
+  exercise_snack_.rep_count = 10;
+  exercise_snack_.ui_start_ms = millis();
+}
+
+void LifeMatrix::set_pomo_preset(const std::string &name) {
+  if (name.find("Deep") != std::string::npos)       pomo_preset_ = POMO_PRESET_DEEP_WORK;
+  else if (name.find("Ultra") != std::string::npos) pomo_preset_ = POMO_PRESET_ULTRADIAN;
+  else                                               pomo_preset_ = POMO_PRESET_CLASSIC;
+  ESP_LOGD(TAG, "Pomo preset set: %d", (int)pomo_preset_);
+}
+
+void LifeMatrix::set_pomo_rounds(int rounds) {
+  if (rounds < 2) rounds = 2;
+  if (rounds > 8) rounds = 8;
+  pomo_rounds_before_long_break_ = rounds;
+}
+
+void LifeMatrix::set_pomo_phase_override(const std::string &phase) {
+  if (phase == "work") {
+    pomo_phase_ = POMO_WORK;
+    pomo_phase_start_ms_ = millis();
+    pomo_paused_total_ms_ = 0;
+    pomo_paused_ = false;
+    if (pomo_event_sensor_) pomo_event_sensor_->publish_state("work_started");
+  } else if (phase == "break") {
+    pomo_phase_ = POMO_WORK;  // Pretend we were in work so advance goes to break
+    pomo_phase_start_ms_ = millis() - (unsigned long)get_pomo_total_sec() * 1000UL;
+    pomo_paused_total_ms_ = 0;
+    pomo_paused_ = false;
+    advance_pomodoro_phase();
+  } else if (phase == "long") {
+    pomo_completed_rounds_ = pomo_rounds_before_long_break_ - 1;
+    pomo_phase_ = POMO_WORK;
+    pomo_phase_start_ms_ = millis() - (unsigned long)get_pomo_total_sec() * 1000UL;
+    pomo_paused_total_ms_ = 0;
+    pomo_paused_ = false;
+    advance_pomodoro_phase();
+  } else if (phase == "break_near_end") {
+    pomo_phase_ = POMO_BREAK;
+    pomo_paused_total_ms_ = 0;
+    pomo_paused_ = false;
+    pomo_phase_start_ms_ = millis() - (unsigned long)(get_pomo_total_sec() - 5) * 1000UL;
+  } else if (phase == "idle") {
+    reset_pomodoro();
+  } else if (phase.size() > 8 && phase.substr(0, 8) == "elapsed:") {
+    // "elapsed:MM:SS" — jump the current phase to the given elapsed time; timer continues from there.
+    // Only valid while a phase is active (not IDLE/COMPLETE).
+    if (pomo_phase_ != POMO_IDLE && pomo_phase_ != POMO_COMPLETE) {
+      std::string mmss = phase.substr(8);
+      size_t colon = mmss.find(':');
+      if (colon != std::string::npos) {
+        int target_sec = std::stoi(mmss.substr(0, colon)) * 60 + std::stoi(mmss.substr(colon + 1));
+        if (target_sec < 0) target_sec = 0;
+        pomo_paused_total_ms_ = 0;
+        pomo_paused_ = false;
+        pomo_phase_start_ms_ = millis() - (unsigned long)target_sec * 1000UL;
+      }
+    }
+  } else {
+    // Bare MM:SS — jump to an absolute session time (works from any state, starts session if idle).
+    // e.g. "22:22" = 22m22s since session start; "27:00" with Classic preset = 2m into first break.
+    size_t colon = phase.find(':');
+    if (colon != std::string::npos && colon > 0) {
+      bool all_digits = true;
+      for (size_t i = 0; i < phase.size() && all_digits; i++) {
+        if (i != colon && !std::isdigit((unsigned char)phase[i])) all_digits = false;
+      }
+      if (all_digits) {
+        int target_sec = std::stoi(phase.substr(0, colon)) * 60 +
+                         std::stoi(phase.substr(colon + 1));
+        PomodoroPresetConfig cfg = get_preset_config();
+        int n = pomo_rounds_before_long_break_;
+        int t = 0;
+        bool found = false;
+        for (int r = 0; r < n && !found; r++) {
+          int work_dur = cfg.work_min * 60;
+          if (target_sec < t + work_dur) {
+            pomo_phase_ = POMO_WORK;
+            pomo_completed_rounds_ = r;
+            pomo_session_elapsed_at_phase_start_sec_ = t;
+            pomo_phase_start_ms_ = millis() - (unsigned long)(target_sec - t) * 1000UL;
+            pomo_paused_total_ms_ = 0;
+            pomo_paused_ = false;
+            found = true;
+          } else {
+            t += work_dur;
+            int break_dur = (r < n - 1) ? cfg.break_min * 60 : cfg.long_break_min * 60;
+            PomodoroPhase bphase = (r < n - 1) ? POMO_BREAK : POMO_LONG_BREAK;
+            if (target_sec < t + break_dur) {
+              pomo_phase_ = bphase;
+              pomo_completed_rounds_ = r + 1;
+              pomo_session_elapsed_at_phase_start_sec_ = t;
+              pomo_phase_start_ms_ = millis() - (unsigned long)(target_sec - t) * 1000UL;
+              pomo_paused_total_ms_ = 0;
+              pomo_paused_ = false;
+              found = true;
+            } else {
+              t += break_dur;
+            }
+          }
+        }
+        if (!found) {
+          // Past session end — mark complete
+          pomo_phase_ = POMO_COMPLETE;
+          pomo_phase_start_ms_ = millis();
+          pomo_completed_rounds_ = n;
+          pomo_session_elapsed_at_phase_start_sec_ = t;
+        }
+        ESP_LOGD(TAG, "Pomo session jump to %ds: phase=%d rounds=%d sess_at=%d",
+                 target_sec, (int)pomo_phase_, pomo_completed_rounds_,
+                 pomo_session_elapsed_at_phase_start_sec_);
+      }
+    }
+  }
+}
+
+// ============================================================================
+// POMODORO RENDERING
+// ============================================================================
+
+void LifeMatrix::render_spiral_timer(display::Display &it, int elapsed_sec, int total_sec,
+                                     Viewport vp, Color colors[4]) {
+  if (total_sec <= 0) return;
+
+  int quarter_h   = std::max(1, vp.viz_height / 4);
+  int quarter_px  = 30 * quarter_h;
+  int total_pixels = 4 * quarter_px;
+
+  int filled_pixels = (int)((float)elapsed_sec / total_sec * total_pixels);
+  if (filled_pixels > total_pixels) filled_pixels = total_pixels;
+
+  for (int q = 0; q < 4; q++) {
+    int q_start_pix   = q * quarter_px;
+    int q_filled      = filled_pixels - q_start_pix;
+    if (q_filled <= 0) continue;
+    if (q_filled > quarter_px) q_filled = quarter_px;
+
+    int quarter_start_row = q * quarter_h;
+    Color quarter_color   = colors[q];
+    Color dim_color = Color(quarter_color.r * 3 / 20,
+                            quarter_color.g * 3 / 20,
+                            quarter_color.b * 3 / 20);
+
+    for (int row = 0; row < quarter_h; row++) {
+      int abs_row = quarter_start_row + row;
+      int y_pos = fill_direction_bottom_to_top_
+          ? (vp.viz_y + vp.viz_height - 1 - abs_row)
+          : (vp.viz_y + abs_row);
+      for (int col = 1; col <= 30; col++) {
+        int pix = row * 30 + (col - 1);
+        draw_pixel(it, col, y_pos, (pix < q_filled) ? quarter_color : dim_color);
+      }
+    }
+  }
+}
+
+void LifeMatrix::render_pomodoro_blocks(display::Display &it, Viewport vp) {
+  auto cfg = get_preset_config();
+  int n = pomo_rounds_before_long_break_;
+  if (n <= 0) return;
+
+  const int block_w = 30;
+  int block_h = vp.viz_height / n;
+  if (block_h <= 0) return;
+
+  // Generate clockwise perimeter-spiral starting from the bottom-left corner.
+  // Order: bottom row left→right, right col bottom→top, top row right→left,
+  //        left col top→bottom, repeat inward. Max 30×120 = 3600 pixels (n=1 full height).
+  // Cached: only recomputed when block_h changes (geometry is constant during a session).
+  static int   s_cached_block_h = -1;
+  static int   s_spiral_len = 0;
+  static int8_t xs[3600], ys[3600];
+  if (block_h != s_cached_block_h) {
+    s_cached_block_h = block_h;
+    s_spiral_len = 0;
+    int top = 0, bot = block_h - 1, left = 0, right = block_w - 1;
+    while (top <= bot && left <= right) {
+      for (int x = left; x <= right; x++) { xs[s_spiral_len] = x; ys[s_spiral_len++] = bot; }
+      bot--;
+      for (int y = bot; y >= top; y--) { xs[s_spiral_len] = right; ys[s_spiral_len++] = y; }
+      right--;
+      if (top <= bot) {
+        for (int x = right; x >= left; x--) { xs[s_spiral_len] = x; ys[s_spiral_len++] = top; }
+        top++;
+      }
+      if (left <= right) {
+        for (int y = top; y <= bot; y++) { xs[s_spiral_len] = left; ys[s_spiral_len++] = y; }
+        left++;
+      }
+    }
+  }
+  int spiral_len = s_spiral_len;
+  if (spiral_len <= 0) return;
+
+  // Determine active block index
+  int active_block = -1;
+  switch (pomo_phase_) {
+    case POMO_IDLE:       active_block = -1; break;
+    case POMO_WORK:       active_block = pomo_completed_rounds_; break;
+    case POMO_BREAK:
+    case POMO_LONG_BREAK: active_block = pomo_completed_rounds_ - 1; break;
+    case POMO_COMPLETE:   active_block = n; break;
+    default:              active_block = -1; break;
+  }
+
+  // Compute work/break fill progress for the active block
+  int work_filled = 0, break_filled = 0;
+  bool in_break = (pomo_phase_ == POMO_BREAK || pomo_phase_ == POMO_LONG_BREAK);
+
+  if (pomo_phase_ == POMO_WORK) {
+    int elapsed = get_pomo_elapsed_sec();
+    int total   = cfg.work_min * 60;
+    if (total > 0) work_filled = std::min(elapsed * spiral_len / total, spiral_len);
+  } else if (in_break) {
+    work_filled = spiral_len;
+    int elapsed = get_pomo_elapsed_sec();
+    int total   = (pomo_phase_ == POMO_LONG_BREAK) ? cfg.long_break_min * 60 : cfg.break_min * 60;
+    if (total > 0) break_filled = std::min((int)((long long)elapsed * spiral_len / total), spiral_len);
+  }
+
+  // True during the 2-second work→break colour-blend animation
+  unsigned long now_ms = millis();
+  bool in_transition = in_break && pomo_work_done_anim_end_ms_ > 0
+                       && now_ms < pomo_work_done_anim_end_ms_;
+
+  // Blend fraction (0.0 = full orange, 1.0 = full blue) for the transition period
+  float blend_t = 0.0f;
+  if (in_transition && pomo_work_done_anim_end_ms_ > now_ms) {
+    blend_t = 1.0f - (float)(pomo_work_done_anim_end_ms_ - now_ms) / 2000.0f;
+  }
+
+  // Colors
+  Color work_c  = Color(255, 120, 0);
+  Color break_c = Color(0, 120, 255);
+
+  // Precompute per-column rainbow for completed blocks: hue only depends on xs[p]
+  // (column 0–29), so 30 lookups replace spiral_len × n_completed hsv_to_rgb calls.
+  Color completed_col[30];
+  if (pomo_completed_rounds_ > 0) {
+    int time_offset = (int)(now_ms / 30) % 360;
+    for (int x = 0; x < 30; x++)
+      completed_col[x] = hsv_to_rgb((x * 12 + time_offset) % 360, 1.0f, 1.0f);
+  }
+
+  // Draw each block
+  for (int i = 0; i < n; i++) {
+    // Display-coordinate origin (top-left) of this block
+    int block_origin_y;
+    if (fill_direction_bottom_to_top_) {
+      block_origin_y = vp.viz_y + vp.viz_height - (i + 1) * block_h;
+    } else {
+      block_origin_y = vp.viz_y + i * block_h;
+    }
+
+    bool is_completed = (i < active_block) || (pomo_phase_ == POMO_COMPLETE);
+    bool is_active    = (i == active_block) && (pomo_phase_ != POMO_COMPLETE) && (pomo_phase_ != POMO_IDLE);
+
+    for (int p = 0; p < spiral_len; p++) {
+      int px = (int)xs[p] + 1;           // column 1..30
+      int py = block_origin_y + (int)ys[p];
+
+      Color c;
+      if (is_completed) {
+        c = completed_col[(int)xs[p]];  // palette precomputed above (30 hsv calls vs spiral_len×n)
+      } else if (is_active) {
+        if (in_transition) {
+          // Orange → blue blend across the whole block simultaneously
+          uint8_t r = (uint8_t)(work_c.r + (int)((break_c.r - (int)work_c.r) * blend_t));
+          uint8_t g = (uint8_t)(work_c.g + (int)((break_c.g - (int)work_c.g) * blend_t));
+          uint8_t b = (uint8_t)(work_c.b + (int)((break_c.b - (int)work_c.b) * blend_t));
+          c = Color(r, g, b);
+        } else if (in_break) {
+          c = (p < break_filled) ? break_c : Color(0, 0, 0);
+        } else {
+          c = (p < work_filled) ? work_c : Color(0, 0, 0);
+        }
+      } else {
+        // Future / IDLE: black
+        c = Color(0, 0, 0);
+      }
+      draw_pixel(it, px, py, c);
+    }
+  }
+}
+
+void LifeMatrix::render_exercise_snack_overlay(display::Display &it) {
+  int w = it.get_width();
+  int h = it.get_height();
+  int overlay_top = h - 22;
+
+  // Black background
+  for (int y = overlay_top; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      it.draw_pixel_at(x, y, Color(0, 0, 0));
+    }
+  }
+
+  // Yellow separator line
+  for (int x = 0; x < w; x++) {
+    it.draw_pixel_at(x, overlay_top, Color(255, 200, 0));
+  }
+
+  // Exercise name (uppercase)
+  if (!exercise_list_.empty() && exercise_snack_.exercise_idx < (int)exercise_list_.size()) {
+    std::string name = exercise_list_[exercise_snack_.exercise_idx];
+    for (auto &c : name) c = toupper((unsigned char)c);
+    it.print(w / 2, overlay_top + 5, font_small_, Color(255, 200, 0),
+             display::TextAlign::CENTER, name.c_str());
+  }
+
+  // Rep/time count — plain number, large and centred
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%d", exercise_snack_.rep_count);
+  it.print(w / 2, overlay_top + 13, font_small_, Color(255, 255, 255),
+           display::TextAlign::CENTER, buf);
+}
+
+void LifeMatrix::render_pomodoro_view(display::Display &it, ESPTime &time, Viewport vp) {
+  int center_x = it.get_width() / 2;
+
+  // ── VISUALIZATION (drawn first so text renders on top) ────────────────────
+  if (style_ == STYLE_TIME_SEGMENTS) {
+    // Session spiral: shows ALL work/break/long-break segments at once.
+    // Elapsed portion is at full brightness; future is dimmed (~15%).
+    // On IDLE all pixels are future → faint session structure visible as a preview.
+    render_pomodoro_blocks(it, vp);
+  } else {
+    // Per-segment fill: separator rows are never counted as elapsed time.
+    // Each phase segment's row range maps proportionally to that segment's time span,
+    // so the fill boundary always lands exactly on the separator.
+    auto cfg = get_preset_config();
+    int n = pomo_rounds_before_long_break_;
+    int total_sec = n * cfg.work_min * 60 + (n - 1) * cfg.break_min * 60 + cfg.long_break_min * 60;
+    int sess_elapsed = (pomo_phase_ == POMO_IDLE) ? 0 : get_session_elapsed_sec();
+
+    // Precompute separator positions (row) and their corresponding time values
+    int bounds[16], t_bounds[16];
+    int nb = 0;
+    if (total_sec > 0) {
+      int acc = 0;
+      for (int r = 0; r < n && nb < 16; r++) {
+        acc += cfg.work_min * 60;
+        if (acc < total_sec) {
+          t_bounds[nb] = acc;
+          bounds[nb++] = (int)((long long)acc * vp.viz_height / total_sec);
+        }
+        int bd = (r < n - 1) ? cfg.break_min * 60 : cfg.long_break_min * 60;
+        acc += bd;
+        if (acc < total_sec) {
+          t_bounds[nb] = acc;
+          bounds[nb++] = (int)((long long)acc * vp.viz_height / total_sec);
+        }
+      }
+    }
+
+    for (int row = 0; row < vp.viz_height; row++) {
+      int y_pos = fill_direction_bottom_to_top_
+          ? (vp.viz_y + vp.viz_height - 1 - row)
+          : (vp.viz_y + row);
+
+      // Find this row's segment: scan bounds to detect separators and bracket the row
+      bool is_sep = false;
+      int seg_row_start = 0, seg_t_start = 0;
+      for (int b = 0; b < nb; b++) {
+        if (row == bounds[b]) { is_sep = true; break; }
+        if (row > bounds[b]) { seg_row_start = bounds[b] + 1; seg_t_start = t_bounds[b]; }
+      }
+      if (is_sep) {
+        for (int col = 1; col <= 30; col++) it.draw_pixel_at(col, y_pos, Color(0, 0, 0));
+        continue;
+      }
+
+      // Find segment end (first bound above this row)
+      int seg_row_end = vp.viz_height - 1, seg_t_end = total_sec;
+      for (int b = 0; b < nb; b++) {
+        if (bounds[b] > row) { seg_row_end = bounds[b] - 1; seg_t_end = t_bounds[b]; break; }
+      }
+
+      // Elapsed time clipped to this segment's span
+      int seg_duration = seg_t_end - seg_t_start;
+      int seg_elapsed  = std::min(std::max(0, sess_elapsed - seg_t_start), seg_duration);
+      int seg_rows     = seg_row_end - seg_row_start + 1;
+      int seg_pixels   = seg_rows * 30;
+      int seg_filled   = (seg_duration > 0)
+          ? (int)((long long)seg_elapsed * seg_pixels / seg_duration)
+          : 0;
+
+      int local_pix_base = (row - seg_row_start) * 30;
+
+      Color bright_c;
+      if (style_ == STYLE_GRADIENT)
+        bright_c = interpolate_gradient((float)row / vp.viz_height, gradient_type_);
+      else if (style_ == STYLE_RAINBOW)
+        bright_c = hsv_to_rgb((row * 360) / vp.viz_height, 1.0f, 1.0f);
+      else
+        bright_c = color_active_;
+      Color dim_c = Color(bright_c.r * 3 / 20, bright_c.g * 3 / 20, bright_c.b * 3 / 20);
+
+      for (int col = 1; col <= 30; col++) {
+        int local_pix = local_pix_base + (col - 1);
+        draw_pixel(it, col, y_pos, (local_pix < seg_filled) ? bright_c : dim_c);
+      }
+    }
+  }
+
+  // ── TEXT AREA (drawn after visualization to stay on top of spiral) ──────
+  if (font_small_ && text_area_position_ != "None") {
+    char text_buf[8];
+    if (pomo_phase_ == POMO_IDLE) {
+      // Show "POMO" and a ">|" hint to indicate press right-encoder to start
+      it.print(center_x, vp.text_y, font_small_, color_active_,
+               display::TextAlign::CENTER, "POMO");
+    } else if (pomo_phase_ == POMO_COMPLETE) {
+      it.print(center_x, vp.text_y, font_small_, color_highlight_,
+               display::TextAlign::CENTER, "DONE!");
+    } else {
+      // Just MM:SS — phase is obvious from spiral warm/cool colors; avoid clipping
+      int remaining = get_pomo_total_sec() - get_pomo_elapsed_sec();
+      if (remaining < 0) remaining = 0;
+      snprintf(text_buf, sizeof(text_buf), "%02d:%02d", remaining / 60, remaining % 60);
+      Color text_color = pomo_paused_ ? Color(120, 120, 120) : color_active_;
+      it.print(center_x, vp.text_y, font_small_, text_color,
+               display::TextAlign::CENTER, text_buf);
+    }
+  }
+
+  // ── EXERCISE SNACK OVERLAY ────────────────────────────────────────────────
+  if (exercise_snack_.ui_visible) {
+    render_exercise_snack_overlay(it);
   }
 }
 

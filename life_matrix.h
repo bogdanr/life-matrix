@@ -10,6 +10,7 @@
 #include "esphome/components/select/select.h"
 #include "esphome/components/switch/switch.h"
 #include "esphome/components/number/number.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 #include <algorithm>
 #include <array>
 #include <vector>
@@ -38,7 +39,8 @@ enum ScreenID {
   SCREEN_HOUR = 3,
   SCREEN_HABITS = 4,
   SCREEN_LIFESPAN = 5,
-  SCREEN_GAME_OF_LIFE = 6
+  SCREEN_GAME_OF_LIFE = 6,
+  SCREEN_POMODORO     = 7
 };
 
 // Life phases for the lifespan view
@@ -91,6 +93,35 @@ struct LifespanConfig {
   std::vector<LifeRange> partner_ranges;
   std::vector<LifeRange> marriage_ranges;
   std::vector<LifeMilestone> milestones;
+};
+
+// Pomodoro timer presets
+enum PomodoroPreset {
+  POMO_PRESET_CLASSIC   = 0,  // 25/5, long break 15
+  POMO_PRESET_DEEP_WORK = 1,  // 50/10, long break 20
+  POMO_PRESET_ULTRADIAN = 2,  // 90/20, long break 30
+};
+
+// Pomodoro timer phases
+enum PomodoroPhase {
+  POMO_IDLE       = 0,
+  POMO_WORK       = 1,
+  POMO_BREAK      = 2,
+  POMO_LONG_BREAK = 3,
+  POMO_COMPLETE   = 4,  // all rounds + long break done
+};
+
+struct PomodoroPresetConfig {
+  int work_min;
+  int break_min;
+  int long_break_min;
+};
+
+struct ExerciseSnackState {
+  int exercise_idx{0};
+  int rep_count{10};
+  bool ui_visible{false};
+  unsigned long ui_start_ms{0};
 };
 
 // Display styles (how fill-bar views are colored)
@@ -320,6 +351,38 @@ class LifeMatrix : public Component {
   bool has_time_override() { return time_override_active_; }
   ESPTime get_time_override() { return fake_time_; }
 
+  // Pomodoro control
+  void start_pomodoro();
+  void pause_pomodoro();
+  void resume_pomodoro();
+  void reset_pomodoro();
+  void skip_pomodoro_phase();
+  void log_exercise_snack();
+  void exercise_adjust_reps(int delta);
+  void exercise_next();
+  void exercise_prev();
+  void set_exercise_list(std::vector<std::string> list) { exercise_list_ = list; }
+  void set_exercise_snacks_enabled(bool en) { exercise_snacks_enabled_ = en; }
+  void set_pomo_preset(const std::string &name);
+  void set_pomo_rounds(int rounds);
+  void set_pomo_phase_override(const std::string &phase);
+
+  // Pomodoro state accessors (for YAML lambdas)
+  int get_pomo_phase() { return (int)pomo_phase_; }
+  int get_pomo_completed_rounds() { return pomo_completed_rounds_; }
+  bool is_pomo_paused() { return pomo_paused_; }
+  bool is_exercise_ui_visible() { return exercise_snack_.ui_visible; }
+  int get_pomo_elapsed_sec() const;
+  int get_pomo_total_sec() const;
+  int get_session_elapsed_sec() const;
+  PomodoroPresetConfig get_preset_config() const;
+
+  // Pomodoro entity registration (called from YAML on_boot)
+  void set_pomo_preset_entity(select::Select *s) { ha_pomo_preset_ = s; }
+  void set_pomo_rounds_entity(number::Number *n) { ha_pomo_rounds_ = n; }
+  void set_pomo_event_sensor(text_sensor::TextSensor *ts) { pomo_event_sensor_ = ts; }
+  void set_pomo_exercise_sensor(text_sensor::TextSensor *ts) { pomo_exercise_sensor_ = ts; }
+
   // HA entity sync — register entities for bidirectional sync (called from YAML on_boot)
   void set_ha_complex_patterns(switch_::Switch *sw) { ha_complex_patterns_ = sw; }
   void set_ha_conway_speed(select::Select *s) { ha_conway_speed_ = s; }
@@ -384,6 +447,14 @@ class LifeMatrix : public Component {
   void render_hour_view(display::Display &it, ESPTime &time, int viz_y, int viz_height);
   void render_game_of_life(display::Display &it, int viz_y, int viz_height);
   void render_lifespan_view(display::Display &it, ESPTime &time, int viz_y, int viz_height);
+
+  // Pomodoro rendering
+  void render_pomodoro_view(display::Display &it, ESPTime &time, Viewport vp);
+  void render_exercise_snack_overlay(display::Display &it);
+  void render_spiral_timer(display::Display &it, int elapsed_sec, int total_sec, Viewport vp, Color colors[4]);
+  void render_pomodoro_blocks(display::Display &it, Viewport vp);
+  void advance_pomodoro_phase();
+  void update_pomodoro();
 
   // Lifespan helpers
   void apply_lifespan_year_events();
@@ -481,6 +552,24 @@ class LifeMatrix : public Component {
   uint8_t lifespan_phase_idx_{0};                  // index into lifespan_active_phases_
   uint32_t lifespan_phase_changed_ms_{0};
 
+  // Pomodoro state
+  PomodoroPhase pomo_phase_{POMO_IDLE};
+  PomodoroPreset pomo_preset_{POMO_PRESET_CLASSIC};
+  unsigned long pomo_phase_start_ms_{0};
+  bool pomo_paused_{false};
+  unsigned long pomo_pause_start_ms_{0};
+  unsigned long pomo_paused_total_ms_{0};
+  int pomo_completed_rounds_{0};
+  int pomo_rounds_before_long_break_{4};
+  int pomo_session_elapsed_at_phase_start_sec_{0};
+  unsigned long pomo_work_done_anim_end_ms_{0};
+  ExerciseSnackState exercise_snack_;
+  bool exercise_snacks_enabled_{true};
+  std::vector<std::string> exercise_list_;
+  select::Select *ha_pomo_preset_{nullptr};
+  number::Number *ha_pomo_rounds_{nullptr};
+  text_sensor::TextSensor *pomo_event_sensor_{nullptr};
+  text_sensor::TextSensor *pomo_exercise_sensor_{nullptr};
   // OTA state
   bool ota_in_progress_{false};
   float ota_progress_{0.0f};
