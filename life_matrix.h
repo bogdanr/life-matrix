@@ -13,6 +13,7 @@
 #include "esphome/components/text_sensor/text_sensor.h"
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <vector>
 #include <string>
 
@@ -350,6 +351,7 @@ class LifeMatrix : public Component {
   void clear_time_override();
   bool has_time_override() { return time_override_active_; }
   ESPTime get_time_override() { return fake_time_; }
+  ESPTime get_display_time() const;  // current time respecting any active override
 
   // Pomodoro control
   void start_pomodoro();
@@ -362,6 +364,7 @@ class LifeMatrix : public Component {
   void exercise_next();
   void exercise_prev();
   void set_exercise_list(std::vector<std::string> list) { exercise_list_ = list; }
+  void set_exercise_list_csv(const std::string &csv);
   void set_exercise_snacks_enabled(bool en) { exercise_snacks_enabled_ = en; }
   void set_pomo_preset(const std::string &name);
   void set_pomo_rounds(int rounds);
@@ -382,6 +385,12 @@ class LifeMatrix : public Component {
   void set_pomo_rounds_entity(number::Number *n) { ha_pomo_rounds_ = n; }
   void set_pomo_event_sensor(text_sensor::TextSensor *ts) { pomo_event_sensor_ = ts; }
   void set_pomo_exercise_sensor(text_sensor::TextSensor *ts) { pomo_exercise_sensor_ = ts; }
+
+  // Night mode brightness control
+  void set_base_brightness_pct(float pct);
+  void set_night_mode_level(int level);
+  void set_brightness_fn(std::function<void(int)> fn) { brightness_fn_ = std::move(fn); }
+  void apply_brightness();
 
   // HA entity sync — register entities for bidirectional sync (called from YAML on_boot)
   void set_ha_complex_patterns(switch_::Switch *sw) { ha_complex_patterns_ = sw; }
@@ -451,6 +460,7 @@ class LifeMatrix : public Component {
   // Pomodoro rendering
   void render_pomodoro_view(display::Display &it, ESPTime &time, Viewport vp);
   void render_exercise_snack_overlay(display::Display &it);
+  void render_pomo_idle_logo(display::Display &it, Viewport vp);
   void render_spiral_timer(display::Display &it, int elapsed_sec, int total_sec, Viewport vp, Color colors[4]);
   void render_pomodoro_blocks(display::Display &it, Viewport vp);
   void advance_pomodoro_phase();
@@ -578,6 +588,12 @@ class LifeMatrix : public Component {
   bool time_override_active_{false};
   ESPTime fake_time_{};
   uint32_t time_override_start_ms_{0};
+
+  // Night mode brightness state
+  float base_brightness_pct_{20.0f};
+  int night_mode_level_{0};
+  uint8_t last_brightness_hour_{255};
+  std::function<void(int)> brightness_fn_;
 
   // HA entity pointers for bidirectional sync
   switch_::Switch *ha_complex_patterns_{nullptr};
