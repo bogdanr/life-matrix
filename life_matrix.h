@@ -287,6 +287,30 @@ class LifeMatrix : public Component {
   void set_lifespan_phase_cycle(float seconds) { lifespan_config_.phase_cycle_s = seconds; }
   void refresh_lifespan() { apply_lifespan_year_events(); precompute_lifespan_phases(); }
 
+  // Lifespan setters that also refresh (for on_value callbacks)
+  void update_lifespan_birthday(const std::string &d)      { set_lifespan_birthday(d);       refresh_lifespan(); }
+  void update_lifespan_kids(const std::string &d)          { set_lifespan_kids(d);           refresh_lifespan(); }
+  void update_lifespan_parents(const std::string &d)       { set_lifespan_parents(d);        refresh_lifespan(); }
+  void update_lifespan_siblings(const std::string &d)      { set_lifespan_siblings(d);       refresh_lifespan(); }
+  void update_lifespan_milestones(const std::string &d)    { set_lifespan_milestones(d);     refresh_lifespan(); }
+  void update_lifespan_partner_ranges(const std::string &d){ set_lifespan_partner_ranges(d); refresh_lifespan(); }
+  void update_lifespan_marriage_ranges(const std::string &d){ set_lifespan_marriage_ranges(d); refresh_lifespan(); }
+  void update_lifespan_moved_out_age(int v)    { set_lifespan_moved_out_age(v);    refresh_lifespan(); }
+  void update_lifespan_school_years(int v)     { set_lifespan_school_years(v);     refresh_lifespan(); }
+  void update_lifespan_retirement_age(int v)   { set_lifespan_retirement_age(v);   refresh_lifespan(); }
+  void update_lifespan_life_expectancy(int v)  { set_lifespan_life_expectancy(v);  refresh_lifespan(); }
+  void update_lifespan_phase_cycle(float v)    { set_lifespan_phase_cycle(v);      refresh_lifespan(); }
+
+  // Input handlers — called directly from YAML encoder/button on_press
+  void enc1_clockwise();
+  void enc1_anticlockwise();
+  void enc2_clockwise();
+  void enc2_anticlockwise();
+  void toggle_settings_mode();
+  void enc2_press();
+  void button_down_press();
+  void adjust_display_brightness(int delta);
+
   // Screen management
   void register_screen(int screen_id, bool enabled);
   void next_screen();
@@ -335,10 +359,15 @@ class LifeMatrix : public Component {
   // Time segments configuration
   void set_time_segments(const TimeSegmentsConfig &config) { time_segments_ = config; }
   TimeSegmentsConfig get_time_segments() { return time_segments_; }
+  void set_bed_time_hour(int h) { time_segments_.bed_time_hour = h; apply_brightness(); }
+  void set_work_start_hour(int h) { time_segments_.work_start_hour = h; }
+  void set_work_end_hour(int h) { time_segments_.work_end_hour = h; }
 
   // Game of Life configuration
   void set_game_config(const GameOfLifeConfig &config) { game_config_ = config; }
   GameOfLifeConfig get_game_config() { return game_config_; }
+  void set_complex_patterns(bool enable) { game_config_.complex_patterns = enable; }
+  void set_game_update_interval(const std::string &speed_str);
 
   // OTA handling
   void set_ota_in_progress(bool in_progress) { ota_in_progress_ = in_progress; if (!in_progress) ota_progress_ = 0.0f; }
@@ -348,6 +377,7 @@ class LifeMatrix : public Component {
 
   // Time override for testing
   void set_time_override(const std::string &time_str);
+  void set_time_override_from_str(const std::string &s);  // handles empty/"clear"/"off"
   void clear_time_override();
   bool has_time_override() { return time_override_active_; }
   ESPTime get_time_override() { return fake_time_; }
@@ -407,6 +437,7 @@ class LifeMatrix : public Component {
   void set_ha_work_start_hour(number::Number *n) { ha_work_start_hour_ = n; }
   void set_ha_work_end_hour(number::Number *n) { ha_work_end_hour_ = n; }
   void set_ha_cycle_time(number::Number *n) { ha_cycle_time_ = n; }
+  void set_ha_display_brightness(number::Number *n) { ha_display_brightness_ = n; }
 
  protected:
   // Component references
@@ -610,6 +641,7 @@ class LifeMatrix : public Component {
   number::Number *ha_work_start_hour_{nullptr};
   number::Number *ha_work_end_hour_{nullptr};
   number::Number *ha_cycle_time_{nullptr};
+  number::Number *ha_display_brightness_{nullptr};
 };
 
 }  // namespace life_matrix

@@ -3521,6 +3521,7 @@ void LifeMatrix::set_pomo_rounds(int rounds) {
 }
 
 void LifeMatrix::set_pomo_phase_override(const std::string &phase) {
+  if (phase.empty()) return;
   if (phase == "work") {
     pomo_phase_ = POMO_WORK;
     pomo_phase_start_ms_ = millis();
@@ -4204,6 +4205,110 @@ void LifeMatrix::render_pomodoro_view(display::Display &it, ESPTime &time, Viewp
   if (exercise_snack_.ui_visible) {
     render_exercise_snack_overlay(it);
   }
+}
+
+// ============================================================================
+// INPUT HANDLERS
+// ============================================================================
+
+void LifeMatrix::enc1_clockwise() {
+  if (get_current_screen_id() == SCREEN_POMODORO && is_exercise_ui_visible()) {
+    exercise_next();
+  } else if (ui_mode_ == SETTINGS) {
+    next_settings_cursor();
+  } else {
+    set_ui_mode(MANUAL_BROWSE);
+    next_screen();
+  }
+}
+
+void LifeMatrix::enc1_anticlockwise() {
+  if (get_current_screen_id() == SCREEN_POMODORO && is_exercise_ui_visible()) {
+    exercise_prev();
+  } else if (ui_mode_ == SETTINGS) {
+    prev_settings_cursor();
+  } else {
+    set_ui_mode(MANUAL_BROWSE);
+    prev_screen();
+  }
+}
+
+void LifeMatrix::adjust_display_brightness(int delta) {
+  if (!ha_display_brightness_) return;
+  auto call = ha_display_brightness_->make_call();
+  call.set_value(ha_display_brightness_->state + (float)delta);
+  call.perform();
+}
+
+void LifeMatrix::enc2_clockwise() {
+  if (get_current_screen_id() == SCREEN_POMODORO && is_exercise_ui_visible()) {
+    exercise_adjust_reps(+1);
+  } else if (ui_mode_ == SETTINGS) {
+    if (settings_cursor_ == 0)
+      adjust_display_brightness(+5);
+    else
+      adjust_setting(+1);
+  } else {
+    adjust_display_brightness(+5);
+  }
+}
+
+void LifeMatrix::enc2_anticlockwise() {
+  if (get_current_screen_id() == SCREEN_POMODORO && is_exercise_ui_visible()) {
+    exercise_adjust_reps(-1);
+  } else if (ui_mode_ == SETTINGS) {
+    if (settings_cursor_ == 0)
+      adjust_display_brightness(-5);
+    else
+      adjust_setting(-1);
+  } else {
+    adjust_display_brightness(-5);
+  }
+}
+
+void LifeMatrix::toggle_settings_mode() {
+  set_ui_mode(ui_mode_ == SETTINGS ? AUTO_CYCLE : SETTINGS);
+}
+
+void LifeMatrix::enc2_press() {
+  if (get_current_screen_id() == SCREEN_POMODORO) {
+    if (is_exercise_ui_visible())
+      log_exercise_snack();
+    else if (pomo_phase_ == POMO_IDLE)
+      start_pomodoro();
+    else if (pomo_paused_)
+      resume_pomodoro();
+    else
+      pause_pomodoro();
+  } else {
+    toggle_pause();
+  }
+}
+
+void LifeMatrix::button_down_press() {
+  int screen = get_current_screen_id();
+  if (screen == SCREEN_GAME_OF_LIFE)
+    reset_game_of_life();
+  else if (screen == SCREEN_POMODORO)
+    skip_pomodoro_phase();
+}
+
+// ============================================================================
+// MISC SETTING HELPERS
+// ============================================================================
+
+void LifeMatrix::set_game_update_interval(const std::string &speed_str) {
+  int ms = 200;
+  if (speed_str.find("50") != std::string::npos)        ms = 50;
+  else if (speed_str.find("1000") != std::string::npos) ms = 1000;
+  set_game_update_interval(ms);
+}
+
+void LifeMatrix::set_time_override_from_str(const std::string &s) {
+  if (s.empty() || s == "clear" || s == "off")
+    clear_time_override();
+  else
+    set_time_override(s);
 }
 
 // ============================================================================
