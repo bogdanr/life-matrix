@@ -12,7 +12,7 @@ substitutions:
 esphome:
   name: ${devicename}
   on_boot:
-    - priority: 600  # Early — before switches restore
+    - priority: 600 # Early — before switches restore
       then:
         - light.turn_on:
             id: status_led
@@ -20,7 +20,7 @@ esphome:
             red: 0%
             green: 100%
             blue: 0%
-    - priority: -100  # Late — after switches restore
+    - priority: -100 # Late — after switches restore
       then:
         - delay: 100ms
         - lambda: |-
@@ -127,16 +127,6 @@ font:
     size: 16
     glyphs: >-
       !"%()+*=,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz@
-
-color:
-  - id: c_active
-    hex: "FFFFFF"
-  - id: c_weekend
-    hex: "FF0000"
-  - id: c_marker
-    hex: "0066FF"
-  - id: c_highlight
-    hex: "FFFF00"
 
 # -------------------------------------------------------------------------
 # SCREEN ENABLE/DISABLE SWITCHES
@@ -913,7 +903,7 @@ display:
         }
         char buf[8];
         snprintf(buf, sizeof(buf), "%.0f%%", pct);
-        it.print(cx, cy + 12, id(font_sm), id(c_active), TextAlign::CENTER, buf);
+        it.print(cx, cy + 12, id(font_sm), Color(255, 255, 255), TextAlign::CENTER, buf);
         return;
       }
 
@@ -1001,3 +991,13 @@ life_matrix:
   gradient_type: "Red-Blue"
   text_area_position: "Top"
   fill_direction: "Bottom to Top"
+
+  # Icons (optional) - animated GIFs from LaMetric, files, or URLs
+  # icon_cache: true  # Cache downloaded icons (default: true)
+  # icons:
+  #   - icon_id: play
+  #     lameid: "32866"
+  #   - icon_id: pause
+  #     file: "icons/pause.gif"
+  #   - icon_id: custom
+  #     url: "https://example.com/icon.gif"

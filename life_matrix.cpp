@@ -72,6 +72,9 @@ void LifeMatrix::loop() {
   // Update Pomodoro timer
   update_pomodoro();
 
+  // Update icon animations
+  update_icon_animations();
+
   // Update screen cycling
   update_screen_cycle();
 
@@ -488,7 +491,7 @@ void LifeMatrix::next_settings_cursor() {
   } else if (screen_id == SCREEN_YEAR) {
     max_cursor = 6;  // 3 global + 4 year settings
   } else if (screen_id == SCREEN_POMODORO) {
-    max_cursor = 6;  // 3 global + 4 pomodoro settings (style, grad, preset, rounds)
+    max_cursor = 7;  // 3 global + 5 pomodoro settings (style, grad, preset, rounds, exercise)
   }
 
   settings_cursor_ = (settings_cursor_ + 1) % (max_cursor + 1);
@@ -515,7 +518,7 @@ void LifeMatrix::prev_settings_cursor() {
   } else if (screen_id == SCREEN_YEAR) {
     max_cursor = 6;
   } else if (screen_id == SCREEN_POMODORO) {
-    max_cursor = 6;  // 3 global + 4 pomodoro settings (style, grad, preset, rounds)
+    max_cursor = 7;  // 3 global + 5 pomodoro settings (style, grad, preset, rounds, exercise)
   }
 
   settings_cursor_ = (settings_cursor_ - 1 + max_cursor + 1) % (max_cursor + 1);
@@ -709,6 +712,10 @@ void LifeMatrix::adjust_setting(int direction) {
         if (pomo_rounds_before_long_break_ > 8) pomo_rounds_before_long_break_ = 2;
         if (ha_pomo_rounds_) ha_pomo_rounds_->publish_state((float)pomo_rounds_before_long_break_);
         ESP_LOGD(TAG, "Pomo rounds: %d", pomo_rounds_before_long_break_);
+      } else if (local == 4) {
+        exercise_snacks_enabled_ = !exercise_snacks_enabled_;
+        if (ha_exercise_snacks_) ha_exercise_snacks_->publish_state(exercise_snacks_enabled_);
+        ESP_LOGD(TAG, "Exercise snacks: %s", exercise_snacks_enabled_ ? "on" : "off");
       }
     }
   }
@@ -756,6 +763,7 @@ std::string LifeMatrix::get_current_setting_name() {
     if (local == 1) return "Grad";
     if (local == 2) return "Prset";
     if (local == 3) return "Rnds";
+    if (local == 4) return "ExSnc";
   }
   return "?";
 }
@@ -895,6 +903,8 @@ std::string LifeMatrix::get_current_setting_value() {
       char buf[4];
       snprintf(buf, sizeof(buf), "%d", pomo_rounds_before_long_break_);
       return buf;
+    } else if (local == 4) {
+      return exercise_snacks_enabled_ ? "On" : "Off";
     }
   }
   return "?";
@@ -4065,6 +4075,127 @@ static const uint16_t kSplashScreenData[3840] = {
   0x18e4, 0x18e4, 0x18e4, 0x18e4, 0x18e4, 0x18e4, 0x18e4, 0x18e4, 0x18e4, 0x18e4, 0x18e4, 0x18e4, 0x18e4, 0x18e4, 0x18e4, 0x18e4
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ICON REGISTRY AND RENDERING
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Default built-in play icon (8x8 RGB565) - down arrow indicating "press here"
+// Design: downward pointing arrow, 5 pixels wide, right-aligned, bottom-aligned
+// Color: tomato orange (0xFA2A) - consistent with pomodoro theme
+static const uint16_t kDefaultPlayIcon[64] = {
+  // Row 0: ........
+  0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F,
+  // Row 1: ........
+  0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F,
+  // Row 2: ........
+  0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F,
+  // Row 3: ........
+  0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F,
+  // Row 4: ........
+  0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F,
+  // Row 5: ..#####
+  0xF81F, 0xF81F, 0xFA2A, 0xFA2A, 0xFA2A, 0xFA2A, 0xFA2A, 0xF81F,
+  // Row 6: ...###
+  0xF81F, 0xF81F, 0xF81F, 0xFA2A, 0xFA2A, 0xFA2A, 0xF81F, 0xF81F,
+  // Row 7: ....#
+  0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xFA2A, 0xF81F, 0xF81F, 0xF81F,
+};
+
+void LifeMatrix::register_icon_frames(const std::string &icon_id, const uint16_t *data, uint8_t frame_count, std::vector<uint16_t> durations) {
+  IconData icon;
+  icon.data = data;
+  icon.frame_count = frame_count;
+  for (size_t i = 0; i < durations.size() && i < MAX_ICON_FRAMES; i++) {
+    icon.frame_durations[i] = durations[i];
+  }
+  icon_registry_[icon_id] = icon;
+  
+  // Initialize animation state
+  icon_current_frame_[icon_id] = 0;
+  icon_last_frame_time_[icon_id] = 0;
+}
+
+bool LifeMatrix::has_icon(const std::string &icon_id) const {
+  // Check registry first, then fall back to built-in defaults
+  if (icon_registry_.find(icon_id) != icon_registry_.end()) return true;
+  if (icon_id == "play") return true;  // Built-in default
+  return false;
+}
+
+void LifeMatrix::update_icon_animations() {
+  uint32_t now = millis();
+  
+  for (auto &kv : icon_registry_) {
+    const std::string &icon_id = kv.first;
+    IconData &icon_data = kv.second;
+    
+    if (icon_data.frame_count <= 1) continue;  // Static icon
+    
+    uint8_t current_frame = icon_current_frame_[icon_id];
+    uint32_t last_time = icon_last_frame_time_[icon_id];
+    uint16_t duration = icon_data.frame_durations[current_frame];
+    
+    if (now - last_time >= duration) {
+      // Advance to next frame
+      icon_current_frame_[icon_id] = (current_frame + 1) % icon_data.frame_count;
+      icon_last_frame_time_[icon_id] = now;
+    }
+  }
+}
+
+void LifeMatrix::draw_icon(display::Display &it, const std::string &icon_id, int x, int y) {
+  draw_icon(it, icon_id, x, y, color_active_);
+}
+
+void LifeMatrix::draw_icon(display::Display &it, const std::string &icon_id, int x, int y, Color tint_color) {
+  const uint16_t *data = nullptr;
+  uint8_t frame_count = 1;
+  uint8_t current_frame = 0;
+  
+  // Look up icon in registry
+  auto it_icon = icon_registry_.find(icon_id);
+  if (it_icon != icon_registry_.end()) {
+    IconData &icon = it_icon->second;
+    data = icon.data;
+    frame_count = icon.frame_count;
+    // Get current frame for animated icons
+    auto it_frame = icon_current_frame_.find(icon_id);
+    if (it_frame != icon_current_frame_.end()) {
+      current_frame = it_frame->second;
+    }
+  } else if (icon_id == "play") {
+    // Fall back to built-in default
+    data = kDefaultPlayIcon;
+    frame_count = 1;
+    current_frame = 0;
+  } else {
+    return;  // Icon not found
+  }
+  
+  // Calculate frame offset in the data array
+  size_t frame_offset = current_frame * ICON_PIXELS;
+  
+  // Render the frame
+  for (int row = 0; row < ICON_SIZE; row++) {
+    for (int col = 0; col < ICON_SIZE; col++) {
+      uint16_t px = data[frame_offset + row * ICON_SIZE + col];
+      if (px == ICON_TRANSPARENT) continue;  // Skip transparent pixels
+      
+      // Apply tint by blending with the original color
+      uint8_t r = ((px >> 11) & 0x1F) * 255 / 31;
+      uint8_t g = ((px >> 5) & 0x3F) * 255 / 63;
+      uint8_t b = (px & 0x1F) * 255 / 31;
+      
+      // Simple tint: average with the tint color
+      uint8_t final_r = (r + tint_color.r) / 2;
+      uint8_t final_g = (g + tint_color.g) / 2;
+      uint8_t final_b = (b + tint_color.b) / 2;
+      
+      draw_pixel(it, x + col, y + row, Color(final_r, final_g, final_b));
+    }
+  }
+}
+
 void LifeMatrix::render_pomo_idle_logo(display::Display &it, Viewport vp) {
   for (int y = 0; y < 120 && y < vp.viz_height; y++) {
     int dy = vp.viz_y + y;
@@ -4189,16 +4320,11 @@ void LifeMatrix::render_pomodoro_view(display::Display &it, ESPTime &time, Viewp
     }
   }
 
-  // ── IDLE INDICATOR: blinking "V" at bottom-right corner ──────────────────
-  if (pomo_phase_ == POMO_IDLE) {
-    bool blink_on = ((millis() / 600) % 2) == 0;
-    if (blink_on) {
-      font::Font *f = font_medium_ ? font_medium_ : font_small_;
-      if (f) {
-        it.print(it.get_width() - 1, it.get_height() - 1, f, color_active_,
-                 display::TextAlign::BOTTOM_RIGHT, "V");
-      }
-    }
+  // ── IDLE INDICATOR: animated play icon at bottom-right corner ───────────────
+  if (pomo_phase_ == POMO_IDLE && has_icon("play")) {
+    int icon_x = it.get_width() - ICON_SIZE - 1;
+    int icon_y = it.get_height() - ICON_SIZE - 1;
+    draw_icon(it, "play", icon_x, icon_y, color_active_);
   }
 
   // ── EXERCISE SNACK OVERLAY ────────────────────────────────────────────────

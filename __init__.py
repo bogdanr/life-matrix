@@ -1,12 +1,24 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
+import logging
+import io
+import os
+import requests
+from PIL import Image
+from urllib.parse import urlparse
+
 from esphome.components import display, time as time_, font, light, sensor
 from esphome.const import (
     CONF_ID,
     CONF_TIME_ID,
     CONF_UPDATE_INTERVAL,
+    CONF_FILE,
+    CONF_RAW_DATA_ID,
 )
 from esphome import automation
+from esphome.core import CORE, HexInt, EsphomeError
+
+_LOGGER = logging.getLogger(__name__)
 
 CONF_DISPLAY = "display"
 CONF_STATUS_LED = "status_led"
@@ -38,6 +50,17 @@ CONF_STYLE = "style"
 CONF_GRADIENT_TYPE = "gradient_type"
 CONF_TEXT_AREA_POSITION = "text_area_position"
 CONF_FILL_DIRECTION = "fill_direction"
+
+# Icon configuration keys
+CONF_ICONS = "icons"
+CONF_LAMEID = "lameid"
+CONF_URL = "url"
+CONF_ICON_ID = "icon_id"
+CONF_ICON_CACHE = "icon_cache"
+
+MAX_ICONS = 50
+ICON_WIDTH = 8
+ICON_HEIGHT = 8
 
 # Lifespan config keys
 CONF_LS_BIRTHDAY        = "birthday"
@@ -99,6 +122,14 @@ LIFESPAN_SCHEMA = cv.Schema({
     cv.Optional(CONF_LS_PHASE_CYCLE, default=3):            cv.int_range(min=0, max=30),
 })
 
+ICON_SCHEMA = cv.Schema({
+    cv.Required(CONF_ICON_ID): cv.string,
+    cv.Exclusive(CONF_FILE, "source"): cv.file_,
+    cv.Exclusive(CONF_URL, "source"): cv.url,
+    cv.Exclusive(CONF_LAMEID, "source"): cv.string,
+    cv.GenerateID(CONF_RAW_DATA_ID): cv.declare_id(cg.uint16),
+})
+
 CONFIG_SCHEMA = cv.Schema({
     cv.GenerateID(): cv.declare_id(LifeMatrix),
     cv.Optional(CONF_DISPLAY): cv.use_id(display.Display),
@@ -143,6 +174,13 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_GRADIENT_TYPE, default="Red-Blue"): cv.string,
     cv.Optional(CONF_TEXT_AREA_POSITION, default="Top"): cv.one_of("Top", "Bottom", "None", upper=False),
     cv.Optional(CONF_FILL_DIRECTION, default="Bottom to Top"): cv.one_of("Bottom to Top", "Top to Bottom", upper=False),
+
+    # Icon configuration
+    cv.Optional(CONF_ICONS): cv.All(
+        cv.ensure_list(ICON_SCHEMA),
+        cv.Length(max=MAX_ICONS),
+    ),
+    cv.Optional(CONF_ICON_CACHE, default=True): cv.boolean,
 }).extend(cv.COMPONENT_SCHEMA)
 
 async def to_code(config):
@@ -253,3 +291,137 @@ async def to_code(config):
     cg.add(var.set_text_area_position(config[CONF_TEXT_AREA_POSITION]))
     cg.add(var.set_fill_direction(config[CONF_FILL_DIRECTION]))
     cg.add(var.set_gradient_type(config[CONF_GRADIENT_TYPE]))
+
+    # Icon processing
+    if CONF_ICONS in config:
+        _LOGGER.info("Processing icons for life-matrix...")
+        use_cache = config.get(CONF_ICON_CACHE, True)
+        
+        for icon_conf in config[CONF_ICONS]:
+            icon_id = icon_conf[CONF_ICON_ID]
+            image = None
+            
+            if CONF_FILE in icon_conf:
+                path = CORE.relative_config_path(icon_conf[CONF_FILE])
+                try:
+                    image = Image.open(path)
+                except Exception as e:
+                    raise EsphomeError(f"Could not load icon file {path}: {e}")
+                    
+            elif CONF_LAMEID in icon_conf:
+                lameid = icon_conf[CONF_LAMEID]
+                cache_path = CORE.relative_config_path(f".cache/life_matrix_icons/{lameid}")
+                
+                if use_cache and os.path.isfile(cache_path):
+                    try:
+                        image = Image.open(cache_path)
+                        _LOGGER.info(f"Loaded icon '{icon_id}' from cache")
+                    except Exception as e:
+                        raise EsphomeError(f"Could not load cached icon {cache_path}: {e}")
+                else:
+                    url = f"https://developer.lametric.com/content/apps/icon_thumbs/{lameid}"
+                    try:
+                        r = requests.get(url, timeout=10.0)
+                        r.raise_for_status()
+                        image = Image.open(io.BytesIO(r.content))
+                        if use_cache:
+                            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+                            with open(cache_path, "wb") as f:
+                                f.write(r.content)
+                            _LOGGER.info(f"Downloaded and cached icon '{icon_id}' (lameid: {lameid})")
+                    except Exception as e:
+                        raise EsphomeError(f"Could not download LaMetric icon {lameid}: {e}")
+                        
+            elif CONF_URL in icon_conf:
+                url = icon_conf[CONF_URL]
+                parsed = urlparse(url)
+                cache_path = CORE.relative_config_path(f".cache/life_matrix_icons/{os.path.basename(parsed.path)}")
+                
+                if use_cache and os.path.isfile(cache_path):
+                    try:
+                        image = Image.open(cache_path)
+                        _LOGGER.info(f"Loaded icon '{icon_id}' from cache")
+                    except Exception as e:
+                        raise EsphomeError(f"Could not load cached icon {cache_path}: {e}")
+                else:
+                    try:
+                        r = requests.get(url, timeout=10.0)
+                        r.raise_for_status()
+                        image = Image.open(io.BytesIO(r.content))
+                        if use_cache:
+                            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+                            with open(cache_path, "wb") as f:
+                                f.write(r.content)
+                            _LOGGER.info(f"Downloaded and cached icon '{icon_id}'")
+                    except Exception as e:
+                        raise EsphomeError(f"Could not download icon from {url}: {e}")
+            
+            if image is None:
+                continue
+            
+            # Determine number of frames
+            n_frames = 1
+            if hasattr(image, "n_frames"):
+                n_frames = min(image.n_frames, 64)  # Cap at 64 frames
+            
+            # Get default frame duration (in ms)
+            default_duration = 100  # Default 100ms per frame
+            try:
+                default_duration = image.info.get("duration", 100)
+            except:
+                pass
+            
+            # Process each frame - collect all data
+            all_frame_data = []
+            frame_durations = []
+            
+            for frame_idx in range(n_frames):
+                # Seek to frame
+                if n_frames > 1:
+                    image.seek(frame_idx)
+                
+                # Make a copy for this frame (important for animated GIFs)
+                frame = image.copy()
+                
+                # Resize to 8x8 if needed
+                width, height = frame.size
+                if width != ICON_WIDTH or height != ICON_HEIGHT:
+                    frame = frame.resize((ICON_WIDTH, ICON_HEIGHT), Image.Resampling.LANCZOS)
+                
+                # Convert to RGBA if needed
+                if frame.mode != "RGBA":
+                    frame = frame.convert("RGBA")
+                
+                # Convert to RGB565 array with transparency marker
+                pixels = list(frame.getdata())
+                for r, g, b, a in pixels:
+                    if a < 128:  # Transparent pixel
+                        all_frame_data.append(0xF81F)  # Magenta as transparent marker
+                    else:
+                        # Convert to RGB565
+                        r5 = (r >> 3) & 0x1F
+                        g6 = (g >> 2) & 0x3F
+                        b5 = (b >> 3) & 0x1F
+                        all_frame_data.append((r5 << 11) | (g6 << 5) | b5)
+                
+                # Get frame duration
+                duration = default_duration
+                if hasattr(image, "info") and "duration" in image.info:
+                    try:
+                        duration = image.info["duration"]
+                    except:
+                        pass
+                frame_durations.append(duration)
+            
+            # Create single progmem array for all frames
+            rhs = [HexInt(x) for x in all_frame_data]
+            prog_arr = cg.progmem_array(icon_conf[CONF_RAW_DATA_ID], rhs)
+            
+            # Register icon with component - pass array, frame count, and durations
+            frame_durations_int = [int(d) for d in frame_durations]
+            cg.add(var.register_icon_frames(icon_id, prog_arr, n_frames, frame_durations_int))
+            
+            if n_frames > 1:
+                _LOGGER.info(f"Registered animated icon '{icon_id}' ({n_frames} frames)")
+            else:
+                _LOGGER.info(f"Registered static icon '{icon_id}'")

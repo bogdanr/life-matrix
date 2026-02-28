@@ -3,7 +3,32 @@
 All notable changes to the Life Matrix component will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2-0-0.html).
+
+## [1.2.0] - 2026-02-28
+
+### Added
+- **Pomodoro Timer screen** (screen ID 7) — work/break timer with spiral visualization
+  - Three presets: Classic (25/5), Deep Work (50/10), Ultradian (90/20)
+  - Configurable rounds before long break (2-8)
+  - Exercise snack reminders after work sessions (configurable exercise list)
+  - Work complete celebration animations
+  - Session time display with elapsed/fill visualization
+  - Idle screen shows session preview and animated play icon
+- **Icon registry system** — framework for animated icons with frame durations and playback
+  - `register_icon_frames()` for registering animated icons from YAML
+  - `draw_icon()` with optional tint color
+  - Automatic frame advancement based on per-frame durations
+  - LaMetric icon cache support for downloading icons at compile time
+- **Night mode dimming** — automatic brightness reduction during night hours
+- **Exercise Snacks toggle in on-device settings menu** — pomodoro screen shows "ExSnc" (On/Off) as 5th setting
+- Bidirectional sync between physical "ExSnc" toggle and HA `exercise_snacks` switch
+
+### Changed
+- **Simplified YAML configuration** — moved display lambda logic into C++ methods
+  - OTA progress rendering handled in component
+  - Settings overlay rendering handled in component
+- Removed unused color definitions from YAML (c_active, c_weekend, c_marker, c_highlight)
 
 ## [1.1.0] - 2026-02-21
 

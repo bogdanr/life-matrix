@@ -16,6 +16,7 @@
 #include <functional>
 #include <vector>
 #include <string>
+#include <map>
 
 namespace esphome {
 namespace life_matrix {
@@ -24,6 +25,25 @@ namespace life_matrix {
 static const int GRID_WIDTH = 32;
 static const int GRID_HEIGHT = 120;
 static const int GRID_SIZE = GRID_WIDTH * GRID_HEIGHT;  // 3840
+
+// Icon dimensions
+static const int ICON_SIZE = 8;
+static const int ICON_PIXELS = ICON_SIZE * ICON_SIZE;  // 64
+
+// Transparent pixel marker in RGB565 (magenta)
+static const uint16_t ICON_TRANSPARENT = 0xF81F;
+
+// Maximum frames per animated icon
+static const int MAX_ICON_FRAMES = 64;
+
+// Icon data stored as contiguous array of frames
+struct IconData {
+  const uint16_t *data{nullptr};       // Pointer to all frame data (contiguous)
+  uint16_t frame_durations[MAX_ICON_FRAMES]; // Duration of each frame in ms
+  uint8_t frame_count{1};
+  uint8_t width{ICON_SIZE};
+  uint8_t height{ICON_SIZE};
+};
 
 // UI modes
 enum UIMode {
@@ -413,6 +433,7 @@ class LifeMatrix : public Component {
   // Pomodoro entity registration (called from YAML on_boot)
   void set_pomo_preset_entity(select::Select *s) { ha_pomo_preset_ = s; }
   void set_pomo_rounds_entity(number::Number *n) { ha_pomo_rounds_ = n; }
+  void set_exercise_snacks_entity(switch_::Switch *s) { ha_exercise_snacks_ = s; }
   void set_pomo_event_sensor(text_sensor::TextSensor *ts) { pomo_event_sensor_ = ts; }
   void set_pomo_exercise_sensor(text_sensor::TextSensor *ts) { pomo_exercise_sensor_ = ts; }
 
@@ -438,6 +459,13 @@ class LifeMatrix : public Component {
   void set_ha_work_end_hour(number::Number *n) { ha_work_end_hour_ = n; }
   void set_ha_cycle_time(number::Number *n) { ha_cycle_time_ = n; }
   void set_ha_display_brightness(number::Number *n) { ha_display_brightness_ = n; }
+
+  // Icon management (called from Python __init__.py)
+  void register_icon_frames(const std::string &icon_id, const uint16_t *data, uint8_t frame_count, std::vector<uint16_t> durations);
+  void draw_icon(display::Display &it, const std::string &icon_id, int x, int y);
+  void draw_icon(display::Display &it, const std::string &icon_id, int x, int y, Color tint_color);
+  bool has_icon(const std::string &icon_id) const;
+  void update_icon_animations();
 
  protected:
   // Component references
@@ -609,6 +637,7 @@ class LifeMatrix : public Component {
   std::vector<std::string> exercise_list_;
   select::Select *ha_pomo_preset_{nullptr};
   number::Number *ha_pomo_rounds_{nullptr};
+  switch_::Switch *ha_exercise_snacks_{nullptr};
   text_sensor::TextSensor *pomo_event_sensor_{nullptr};
   text_sensor::TextSensor *pomo_exercise_sensor_{nullptr};
   // OTA state
@@ -642,6 +671,13 @@ class LifeMatrix : public Component {
   number::Number *ha_work_end_hour_{nullptr};
   number::Number *ha_cycle_time_{nullptr};
   number::Number *ha_display_brightness_{nullptr};
+
+  // Icon registry: maps icon_id string to animated icon data
+  std::map<std::string, IconData> icon_registry_;
+
+  // Icon animation state: tracks current frame for each animated icon
+  std::map<std::string, uint8_t> icon_current_frame_;
+  std::map<std::string, uint32_t> icon_last_frame_time_;
 };
 
 }  // namespace life_matrix

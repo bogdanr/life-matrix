@@ -41,16 +41,6 @@ font:
     glyphs: >-
       !"%()+*=,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz@
 
-color:
-  - id: c_active
-    hex: "FFFFFF"
-  - id: c_weekend
-    hex: "FF0000"
-  - id: c_marker
-    hex: "0066FF"
-  - id: c_highlight
-    hex: "FFFF00"
-
 display:
   - platform: hub75
     id: matrix_display
@@ -66,7 +56,7 @@ display:
       auto time = id(sntp_time).now();
       if (!time.is_valid()) {
         it.print(it.get_width() / 2, it.get_height() / 2, id(font_sm),
-                 id(c_active), TextAlign::CENTER, "Sync...");
+                 Color(255, 255, 255), TextAlign::CENTER, "Sync...");
         return;
       }
       id(life_matrix_component)->render(it, time);
@@ -78,3 +68,9 @@ life_matrix:
   grid_width: 32
   grid_height: 120
   screen_cycle_time: 5s
+
+  # Icons (optional) - downloaded from LaMetric at compile time
+  # icon_cache: true
+  # icons:
+  #   - icon_id: play
+  #     lameid: "32866"

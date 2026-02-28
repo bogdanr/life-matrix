@@ -10,6 +10,7 @@ A time-passage visualization component for ESPHome and HUB75 LED matrix displays
 4. **Hour View** — Spiral fill with multiple color schemes (seasonal, gradient, rainbow, single)
 5. **Lifespan View** — Biographical visualization with life phases (school, career, retirement), relationship markers, and cosmos starfield beyond life expectancy
 6. **Game of Life** — Conway's cellular automaton with age-based coloring and smart auto-reset
+7. **Pomodoro Timer** — Work/break timer with spiral visualization, exercise snack reminders
 
 ## Hardware
 
@@ -82,6 +83,7 @@ life_matrix:
     hour: { enabled: true }
     lifespan: { enabled: true }
     game_of_life: { enabled: true }
+    pomodoro: { enabled: true }    # Pomodoro timer screen
 
   # Game of Life
   game_of_life:
@@ -120,6 +122,34 @@ life_matrix:
   gradient_type: "Red-Blue"       # Red-Blue | Green-Yellow | Cyan-Magenta | Purple-Orange | Blue-Yellow
   fill_direction: "Bottom to Top" # Bottom to Top | Top to Bottom
   text_area_position: "Top"       # Top | Bottom | None
+
+  # Icons (optional) - animated GIFs from LaMetric, local files, or URLs
+  # icon_cache: true              # Cache downloaded icons (default: true)
+  # icons:
+  #   - icon_id: play
+  #     lameid: "32866"           # LaMetric icon ID
+  #   - icon_id: pause
+  #     file: "icons/pause.gif"   # Local file
+  #   - icon_id: custom
+  #     url: "https://example.com/icon.gif"  # Remote URL
+```
+
+## Icons
+
+Animated icons (8×8) can be defined in YAML and rendered anywhere in the display:
+
+**Sources:**
+- `lameid:` — Download from LaMetric (e.g., https://developer.lametric.com/icons/32866)
+- `file:` — Local GIF/PNG file
+- `url:` — Remote URL
+
+**Animation:** GIFs are fully supported with frame timing preserved. Icons animate continuously.
+
+**Usage in C++:**
+```cpp
+draw_icon(it, "play", x, y);                    // Default color
+draw_icon(it, "play", x, y, Color(255, 0, 0));  // Tinted
+if (has_icon("play")) { ... }                   // Check existence
 ```
 
 ## Home Assistant Integration
@@ -137,7 +167,7 @@ See [`example-full.yaml`](example-full.yaml) for a complete working configuratio
 ## Future
 
 - [ ] Interactive Game of Life (cursor + draw)
-- [ ] Pomodoro timer screen
+- [x] Pomodoro timer screen
 - [ ] Accelerometer shake-to-reset
 - [ ] Pixel art / drawing mode
 
