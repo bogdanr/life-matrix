@@ -1070,6 +1070,11 @@ Viewport LifeMatrix::calculate_viewport(display::Display &it) {
   return vp;
 }
 
+Color LifeMatrix::dim_future(Color c) const {
+  if (!show_future_) return Color(0, 0, 0);
+  return Color(c.r / 10, c.g / 10, c.b / 10);
+}
+
 Color LifeMatrix::hsv_to_rgb(int hue, float saturation, float value) {
   // Convert HSV to RGB (hue in degrees 0-360)
   hue = hue % 360;
@@ -1527,8 +1532,7 @@ void LifeMatrix::render_month_view(display::Display &it, ESPTime &time, int viz_
       Color c_full = c;  // full-brightness color before any dimming
       if (p >= elapsed_px) {
         if (is_future) {
-          // Future days: completely dark
-          c = Color(0, 0, 0);
+          c = dim_future(c_full);
         } else {
           // Today's remaining time: 1/4 brightness of activity color
           c = Color(c.r >> 2, c.g >> 2, c.b >> 2);
@@ -1678,19 +1682,21 @@ void LifeMatrix::render_day_view(display::Display &it, ESPTime &time, int viz_y,
     row_type[row] = sleep ? 0 : (work ? 1 : 2);
   }
 
-  // Calculate rainbow progress for life segments
+  // Calculate rainbow progress for life segments (STYLE_TIME_SEGMENTS only)
   float life_progress[120] = {};
-  int seg_start = -1;
-  for (int row = 0; row <= 120; row++) {
-    bool is_life = (row < 120 && row_type[row] == 2);
-    if (is_life && seg_start < 0) {
-      seg_start = row;
-    } else if (!is_life && seg_start >= 0) {
-      int seg_size = row - seg_start;
-      for (int i = 0; i < seg_size; i++) {
-        life_progress[seg_start + i] = (float)i / (float)seg_size;
+  if (style_ == STYLE_TIME_SEGMENTS) {
+    int seg_start = -1;
+    for (int row = 0; row <= 120; row++) {
+      bool is_life = (row < 120 && row_type[row] == 2);
+      if (is_life && seg_start < 0) {
+        seg_start = row;
+      } else if (!is_life && seg_start >= 0) {
+        int seg_size = row - seg_start;
+        for (int i = 0; i < seg_size; i++) {
+          life_progress[seg_start + i] = (float)i / (float)seg_size;
+        }
+        seg_start = -1;
       }
-      seg_start = -1;
     }
   }
 
@@ -1700,26 +1706,35 @@ void LifeMatrix::render_day_view(display::Display &it, ESPTime &time, int viz_y,
 
     float hour_float = (row * 24.0f) / 120.0f;
     int row_minutes = (int)(hour_float * 60);
+    bool is_future = (row_minutes > current_minutes);
 
-    // Only draw past time
-    if (row_minutes > current_minutes) continue;
-
-    // Draw pixels for this row
-    for (int col = 1; col <= 30; col++) {
-      Color pixel_color;
-
+    // Determine pixel color based on style
+    Color pixel_color;
+    if (style_ == STYLE_TIME_SEGMENTS) {
       if (row_type[row] == 0) {
-        // Sleep - dark gray
-        pixel_color = Color(50, 50, 50);
+        pixel_color = Color(50, 50, 50);            // sleep: dark gray
       } else if (row_type[row] == 1) {
-        // Work - orange
-        pixel_color = Color(255, 120, 0);
+        pixel_color = Color(255, 120, 0);           // work: orange
       } else {
-        // Life - full rainbow per segment
         int hue = (int)(life_progress[row] * 360.0f);
-        pixel_color = hsv_to_rgb(hue, 1.0f, 1.0f);
+        pixel_color = hsv_to_rgb(hue, 1.0f, 1.0f); // life: rainbow per segment
       }
+    } else if (style_ == STYLE_GRADIENT) {
+      float progress = (float)row / 120.0f;
+      pixel_color = interpolate_gradient(progress, gradient_type_);
+    } else if (style_ == STYLE_RAINBOW) {
+      int hue = (row * 360) / 120;
+      pixel_color = hsv_to_rgb(hue, 1.0f, 1.0f);
+    } else {
+      pixel_color = color_active_;
+    }
 
+    if (is_future) {
+      pixel_color = dim_future(pixel_color);
+      if (pixel_color.r == 0 && pixel_color.g == 0 && pixel_color.b == 0) continue;
+    }
+
+    for (int col = 1; col <= 30; col++) {
       draw_pixel(it, col, y_pos, pixel_color);
     }
   }
@@ -1754,9 +1769,7 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
       bool is_past_quarter = (q < current_quarter);
       bool is_current_quarter = (q == current_quarter);
 
-      if (!is_past_quarter && !is_current_quarter) continue;  // Skip future quarters
-
-      int seconds_in_quarter = is_past_quarter ? 900 : ((minute % 15) * 60 + second);
+      int seconds_in_quarter = is_past_quarter ? 900 : (is_current_quarter ? ((minute % 15) * 60 + second) : 0);
 
       // Choose color for this quarter
       Color quarter_color;
@@ -1764,6 +1777,8 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
       else if (q == 1) quarter_color = Color(0, 255, 100); // Green
       else if (q == 2) quarter_color = Color(255, 200, 0); // Yellow-Orange
       else quarter_color = Color(255, 0, 100);             // Red-Magenta
+      
+      Color dim_color = dim_future(quarter_color);
 
       // Draw spiral for this quarter
       int spiral_pos = 0;
@@ -1771,9 +1786,9 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
 
       // 1. Draw top edge (row 0, cols 0-29)
       int draw_row = quarter_start_row;
-      for (int draw_col = 1; draw_col <= 30 && spiral_pos < seconds_in_quarter; draw_col++) {
+      for (int draw_col = 1; draw_col <= 30 && spiral_pos < 900; draw_col++) {
         int y_pos = fill_direction_bottom_to_top_ ? (viz_y + viz_height - 1 - draw_row) : (viz_y + draw_row);
-        draw_pixel(it, draw_col, y_pos, quarter_color);
+        draw_pixel(it, draw_col, y_pos, (spiral_pos < seconds_in_quarter) ? quarter_color : dim_color);
         spiral_pos++;
       }
 
@@ -1782,29 +1797,29 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
       int current_col = 29;
       int direction = 1;  // 0=right, 1=down, 2=left, 3=up
 
-      while (length > 0 && spiral_pos < seconds_in_quarter) {
+      while (length > 0 && spiral_pos < 900) {
         length--;
 
         // First side
-        for (int i = 0; i < length && spiral_pos < seconds_in_quarter; i++) {
+        for (int i = 0; i < length && spiral_pos < 900; i++) {
           if (direction == 1) current_spiral_row++;
           else if (direction == 3) current_spiral_row--;
 
           int abs_row = quarter_start_row + current_spiral_row;
           int y_pos = fill_direction_bottom_to_top_ ? (viz_y + viz_height - 1 - abs_row) : (viz_y + abs_row);
-          draw_pixel(it, current_col + 1, y_pos, quarter_color);
+          draw_pixel(it, current_col + 1, y_pos, (spiral_pos < seconds_in_quarter) ? quarter_color : dim_color);
           spiral_pos++;
         }
         direction = (direction + 1) % 4;
 
         // Second side
-        for (int i = 0; i < length && spiral_pos < seconds_in_quarter; i++) {
+        for (int i = 0; i < length && spiral_pos < 900; i++) {
           if (direction == 2) current_col--;
           else if (direction == 0) current_col++;
 
           int abs_row = quarter_start_row + current_spiral_row;
           int y_pos = fill_direction_bottom_to_top_ ? (viz_y + viz_height - 1 - abs_row) : (viz_y + abs_row);
-          draw_pixel(it, current_col + 1, y_pos, quarter_color);
+          draw_pixel(it, current_col + 1, y_pos, (spiral_pos < seconds_in_quarter) ? quarter_color : dim_color);
           spiral_pos++;
         }
         direction = (direction + 1) % 4;
@@ -1834,7 +1849,7 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
     bool is_current_row = (row == current_row);
     bool is_past_row = (row < current_row);
 
-    // Determine how many pixels to draw in this row
+    // Determine how many bright pixels to draw in this row
     int pixels_to_draw = 0;
     if (is_past_row) {
       pixels_to_draw = 30;  // Fully filled
@@ -1842,23 +1857,26 @@ void LifeMatrix::render_hour_view(display::Display &it, ESPTime &time, int viz_y
       pixels_to_draw = pixels_in_row;  // Partially filled
     }
 
+    // Determine color based on scheme
+    Color pixel_color = color_active_;
+
+    if (style_ == STYLE_GRADIENT) {
+      float progress = (float)row / 120.0f;
+      pixel_color = interpolate_gradient(progress, gradient_type_);
+    } else if (style_ == STYLE_RAINBOW) {
+      int hue = (row * 360) / 120;
+      pixel_color = hsv_to_rgb(hue, 1.0f, 1.0f);
+    }
+    // else: Single Color - use color_active_ (already set)
+    
+    Color dim_color = dim_future(pixel_color);
+
     // Draw pixels in this row
-    for (int col = 0; col < pixels_to_draw; col++) {
+    for (int col = 0; col < 30; col++) {
       int x_pos = 1 + col;  // Start at column 1 (skip marker column)
-
-      // Determine color based on scheme
-      Color pixel_color = color_active_;
-
-      if (style_ == STYLE_GRADIENT) {
-        float progress = (float)row / 120.0f;
-        pixel_color = interpolate_gradient(progress, gradient_type_);
-      } else if (style_ == STYLE_RAINBOW) {
-        int hue = (row * 360) / 120;
-        pixel_color = hsv_to_rgb(hue, 1.0f, 1.0f);
-      }
-      // else: Single Color - use color_active_ (already set)
-
-      draw_pixel(it, x_pos, y_pos, pixel_color);
+      Color draw_c = (col < pixels_to_draw) ? pixel_color : dim_color;
+      if (draw_c.r == 0 && draw_c.g == 0 && draw_c.b == 0) continue;
+      draw_pixel(it, x_pos, y_pos, draw_c);
     }
   }
 }
@@ -2105,8 +2123,18 @@ void LifeMatrix::render_year_view(display::Display &it, ESPTime &time, int viz_y
 
           draw_pixel(it, day, screen_y, pixel_color);
         }
+      } else if (show_future_) {
+        // Future non-event day: draw dimmed
+        for (int py = 0; py < month_h; py++) {
+          int logical_row = month_base_row + py;
+          int screen_y = fill_direction_bottom_to_top_ ? (viz_y + viz_height - 1 - logical_row) : (viz_y + logical_row);
+          uint8_t activity_type = get_activity_type(py, month_h, is_weekend);
+          Color pixel_color = dim_future(activity_colors[month_idx][activity_type]);
+          if (pixel_color.r == 0 && pixel_color.g == 0 && pixel_color.b == 0) continue;
+          draw_pixel(it, day, screen_y, pixel_color);
+        }
       }
-      // Future non-event days: leave black (skip)
+      // else future non-event days: leave black (skip)
     }
   }
 

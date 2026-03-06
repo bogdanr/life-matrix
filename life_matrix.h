@@ -280,6 +280,7 @@ class LifeMatrix : public Component {
   void set_style(const std::string &style);
   void set_gradient_type(GradientType type) { gradient_type_ = type; }
   void set_gradient_type(const std::string &type);
+  void set_show_future(bool v) { show_future_ = v; }
   void set_marker_style(MarkerStyle style) { marker_style_ = style; }
   void set_marker_style(const std::string &style);
   void set_marker_color(MarkerColor color) { marker_color_ = color; }
@@ -459,6 +460,7 @@ class LifeMatrix : public Component {
   void set_ha_work_end_hour(number::Number *n) { ha_work_end_hour_ = n; }
   void set_ha_cycle_time(number::Number *n) { ha_cycle_time_ = n; }
   void set_ha_display_brightness(number::Number *n) { ha_display_brightness_ = n; }
+  void set_ha_show_future(switch_::Switch *s) { ha_show_future_ = s; }
 
   // Icon management (called from Python __init__.py)
   void register_icon_frames(const std::string &icon_id, const uint16_t *data, uint8_t frame_count, std::vector<uint16_t> durations);
@@ -491,6 +493,7 @@ class LifeMatrix : public Component {
   float screen_cycle_time_{3.0f};
   std::string text_area_position_{"Top"};
   bool fill_direction_bottom_to_top_{true};
+  bool show_future_{true};
   DisplayStyle style_{STYLE_TIME_SEGMENTS};
   GradientType gradient_type_{GRADIENT_RED_BLUE};
   MarkerStyle marker_style_{MARKER_SINGLE_DOT};
@@ -555,6 +558,7 @@ class LifeMatrix : public Component {
   Color interpolate_gradient(float progress, GradientType type);
   Color get_marker_color_value(MarkerColor color);
   void draw_marker(display::Display &it, int mark_y, int width, MarkerStyle style, Color color);
+  Color dim_future(Color c) const;
 
   // Year view helpers
   void parse_year_events(const std::string &events_str);
@@ -671,6 +675,7 @@ class LifeMatrix : public Component {
   number::Number *ha_work_end_hour_{nullptr};
   number::Number *ha_cycle_time_{nullptr};
   number::Number *ha_display_brightness_{nullptr};
+  switch_::Switch *ha_show_future_{nullptr};
 
   // Icon registry: maps icon_id string to animated icon data
   std::map<std::string, IconData> icon_registry_;
