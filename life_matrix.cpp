@@ -3681,9 +3681,7 @@ void LifeMatrix::render_spiral_timer(display::Display &it, int elapsed_sec, int 
 
     int quarter_start_row = q * quarter_h;
     Color quarter_color   = colors[q];
-    Color dim_color = Color(quarter_color.r * 3 / 20,
-                            quarter_color.g * 3 / 20,
-                            quarter_color.b * 3 / 20);
+    Color dim_color = dim_future(quarter_color);
 
     for (int row = 0; row < quarter_h; row++) {
       int abs_row = quarter_start_row + row;
@@ -3692,7 +3690,9 @@ void LifeMatrix::render_spiral_timer(display::Display &it, int elapsed_sec, int 
           : (vp.viz_y + abs_row);
       for (int col = 1; col <= 30; col++) {
         int pix = row * 30 + (col - 1);
-        draw_pixel(it, col, y_pos, (pix < q_filled) ? quarter_color : dim_color);
+        Color draw_c = (pix < q_filled) ? quarter_color : dim_color;
+        if (draw_c.r == 0 && draw_c.g == 0 && draw_c.b == 0) continue;
+        draw_pixel(it, col, y_pos, draw_c);
       }
     }
   }
@@ -3814,13 +3814,13 @@ void LifeMatrix::render_pomodoro_blocks(display::Display &it, Viewport vp) {
           uint8_t b = (uint8_t)(work_c.b + (int)((break_c.b - (int)work_c.b) * blend_t));
           c = Color(r, g, b);
         } else if (in_break) {
-          c = (p < break_filled) ? break_c : Color(0, 0, 0);
+          c = (p < break_filled) ? break_c : dim_future(break_c);
         } else {
-          c = (p < work_filled) ? work_c : Color(0, 0, 0);
+          c = (p < work_filled) ? work_c : dim_future(work_c);
         }
       } else {
-        // Future / IDLE: black
-        c = Color(0, 0, 0);
+        // Future / IDLE block
+        c = dim_future(work_c);
       }
       draw_pixel(it, px, py, c);
     }
@@ -4317,11 +4317,13 @@ void LifeMatrix::render_pomodoro_view(display::Display &it, ESPTime &time, Viewp
         bright_c = hsv_to_rgb((row * 360) / vp.viz_height, 1.0f, 1.0f);
       else
         bright_c = color_active_;
-      Color dim_c = Color(bright_c.r * 3 / 20, bright_c.g * 3 / 20, bright_c.b * 3 / 20);
+      Color dim_c = dim_future(bright_c);
 
       for (int col = 1; col <= 30; col++) {
         int local_pix = local_pix_base + (col - 1);
-        draw_pixel(it, col, y_pos, (local_pix < seg_filled) ? bright_c : dim_c);
+        Color draw_c = (local_pix < seg_filled) ? bright_c : dim_c;
+        if (draw_c.r == 0 && draw_c.g == 0 && draw_c.b == 0) continue;
+        draw_pixel(it, col, y_pos, draw_c);
       }
     }
   }
