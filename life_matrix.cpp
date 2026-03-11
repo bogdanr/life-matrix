@@ -21,20 +21,20 @@ void LifeMatrix::setup() {
   game_demo_mode_ = true;
   game_demo_start_time_ = millis();
 
-  // Lifespan: extract birthdays into lifespan_year_events_ and precompute active phases
-  apply_lifespan_year_events();
-  precompute_lifespan_phases();
-
   // Set initial status LED state
   update_status_led();
+
+  // Defer restoration until after all entity setters have been called
+  this->defer([this]() {
+    // Restore lifespan entities from NVS (overwrites initial values if found)
+    restore_lifespan_entities_from_nvs_();
+    // Lifespan: extract birthdays into lifespan_year_events_ and precompute active phases
+    apply_lifespan_year_events();
+    precompute_lifespan_phases();
+  });
 }
 
 void LifeMatrix::loop() {
-  // Skip all processing during OTA to speed up updates
-  if (ota_in_progress_) {
-    return;
-  }
-
   bool gol_visible = (get_current_screen_id() == SCREEN_GAME_OF_LIFE);
 
   // Handle GoL screen visibility changes (pause/resume timer)
@@ -573,8 +573,7 @@ void LifeMatrix::adjust_setting(int direction) {
 
   // Global settings (cursor 0-2)
   if (cursor == 0) {
-    // Brightness - not stored in component, handled by YAML
-    ESP_LOGD(TAG, "Brightness adjustment (external control)");
+    // Brightness handled by adjust_display_brightness() via encoder callbacks
   } else if (cursor == 1) {
     // Cycle time
     screen_cycle_time_ = (float)adjust_number((int)screen_cycle_time_, 1, 10, false);
@@ -1112,14 +1111,6 @@ void LifeMatrix::draw_pixel(display::Display &it, int x, int y, Color c) {
 }
 
 void LifeMatrix::render(display::Display &it, ESPTime &time) {
-  // OTA guard - show minimal UI during update
-  if (ota_in_progress_) {
-    int center_x = it.get_width() / 2;
-    int center_y = it.get_height() / 2;
-    it.print(center_x, center_y, font_small_, color_active_, display::TextAlign::CENTER, "OTA");
-    return;
-  }
-
   // Build display time — uses fake time (ticking forward) when override is active
   ESPTime display_time_val = get_display_time();
   ESPTime &display_time = display_time_val;
@@ -4391,8 +4382,14 @@ void LifeMatrix::enc1_anticlockwise() {
 
 void LifeMatrix::adjust_display_brightness(int delta) {
   if (!ha_display_brightness_) return;
+  // Use entity state if valid, otherwise fall back to current tracked value
+  float cur = std::isnan(ha_display_brightness_->state) ? base_brightness_pct_ : ha_display_brightness_->state;
+  float new_pct = std::max(1.0f, std::min(100.0f, cur + (float)delta));
+  // Apply to device immediately — don't rely solely on the callback chain
+  set_base_brightness_pct(new_pct);
+  // Sync HA entity so the web interface stays in sync (also fires callback, harmless)
   auto call = ha_display_brightness_->make_call();
-  call.set_value(ha_display_brightness_->state + (float)delta);
+  call.set_value(new_pct);
   call.perform();
 }
 
@@ -4503,7 +4500,7 @@ ESPTime LifeMatrix::get_display_time() const {
 
 void LifeMatrix::apply_brightness() {
   if (!brightness_fn_) return;
-  int brightness = (int)(base_brightness_pct_ * 2.55f);
+  int b = (int)(base_brightness_pct_ * 2.55f);
   if (night_mode_level_ > 0) {
     auto t = get_display_time();
     if (t.is_valid()) {
@@ -4511,13 +4508,459 @@ void LifeMatrix::apply_brightness() {
       auto wake_h = (uint8_t)time_segments_.wake_time_hour;
       bool is_night = (t.hour >= bed_h || t.hour < wake_h);
       if (is_night) {
-        brightness >>= night_mode_level_;
-        if (brightness < 1) brightness = 1;
+        b >>= night_mode_level_;
+        if (b < 1) b = 1;
       }
     }
   }
-  brightness_fn_(brightness);
+  brightness_fn_((uint8_t)b);
 }
+
+
+// ============================================================================
+// ENTITY REGISTRATION
+// ============================================================================
+void LifeMatrix::add_screen_switch(int screen_id, switch_::Switch *sw) {
+  if (screen_id >= 0 && screen_id < 8) {
+    screen_switches_[screen_id] = sw;
+    sw->add_on_state_callback([this, screen_id](bool state) {
+      this->register_screen(screen_id, state);
+    });
+  }
+}
+
+void LifeMatrix::set_ha_style(select::Select *s) {
+  ha_style_ = s;
+  s->add_on_state_callback([this, s](size_t index) { this->set_style(s->current_option().str()); });
+}
+
+void LifeMatrix::set_ha_text_area_position(select::Select *s) {
+  ha_text_area_position_ = s;
+  s->add_on_state_callback([this, s](size_t index) { this->set_text_area_position(s->current_option().str()); });
+}
+
+void LifeMatrix::set_ha_fill_direction(select::Select *s) {
+  ha_fill_direction_ = s;
+  s->add_on_state_callback([this, s](size_t index) { this->set_fill_direction(s->current_option().str()); });
+}
+
+void LifeMatrix::set_ha_gradient_type(select::Select *s) {
+  ha_gradient_type_ = s;
+  s->add_on_state_callback([this, s](size_t index) { this->set_gradient_type(s->current_option().str()); });
+}
+
+void LifeMatrix::set_ha_marker_style(select::Select *s) {
+  ha_marker_style_ = s;
+  s->add_on_state_callback([this, s](size_t index) { this->set_marker_style(s->current_option().str()); });
+}
+
+void LifeMatrix::set_ha_marker_color(select::Select *s) {
+  ha_marker_color_ = s;
+  s->add_on_state_callback([this, s](size_t index) { this->set_marker_color(s->current_option().str()); });
+}
+
+void LifeMatrix::set_ha_day_fill(select::Select *s) {
+  ha_day_fill_ = s;
+  s->add_on_state_callback([this, s](size_t index) { this->set_day_fill(s->current_option().str()); });
+}
+
+void LifeMatrix::set_ha_year_event_style(select::Select *s) {
+  ha_year_event_style_ = s;
+  s->add_on_state_callback([this, s](size_t index) { this->set_year_event_style(s->current_option().str()); });
+}
+
+void LifeMatrix::set_ha_conway_speed(select::Select *s) {
+  ha_conway_speed_ = s;
+  s->add_on_state_callback([this, s](size_t index) { this->set_game_update_interval(s->current_option().str()); });
+}
+
+void LifeMatrix::set_ha_pomo_preset(select::Select *s) {
+  ha_pomo_preset_ = s;
+  s->add_on_state_callback([this, s](size_t index) { this->set_pomo_preset(s->current_option().str()); });
+}
+
+void LifeMatrix::set_ha_show_future(switch_::Switch *sw) {
+  ha_show_future_ = sw;
+  sw->add_on_state_callback([this](bool state) { this->set_show_future(state); });
+}
+
+void LifeMatrix::set_ha_complex_patterns(switch_::Switch *sw) {
+  ha_complex_patterns_ = sw;
+  sw->add_on_state_callback([this](bool state) { this->set_complex_patterns(state); });
+}
+
+void LifeMatrix::set_ha_exercise_snacks(switch_::Switch *sw) {
+  ha_exercise_snacks_ = sw;
+  sw->add_on_state_callback([this](bool state) { this->set_exercise_snacks_enabled(state); });
+}
+
+void LifeMatrix::set_ha_display_brightness(number::Number *n) {
+  ha_display_brightness_ = n;
+  n->add_on_state_callback([this](float val) { this->set_base_brightness_pct(val); });
+}
+
+void LifeMatrix::set_ha_night_mode_level(number::Number *n) {
+  ha_night_mode_level_ = n;
+  n->add_on_state_callback([this](float val) { this->set_night_mode_level((int)val); });
+}
+
+void LifeMatrix::set_ha_cycle_time(number::Number *n) {
+  ha_cycle_time_ = n;
+  n->add_on_state_callback([this](float val) { this->set_screen_cycle_time(val); });
+}
+
+void LifeMatrix::set_ha_bed_time_hour(number::Number *n) {
+  ha_bed_time_hour_ = n;
+  n->add_on_state_callback([this](float val) { this->set_bed_time_hour((int)val); });
+}
+
+void LifeMatrix::set_ha_work_start_hour(number::Number *n) {
+  ha_work_start_hour_ = n;
+  n->add_on_state_callback([this](float val) { this->set_work_start_hour((int)val); });
+}
+
+void LifeMatrix::set_ha_work_end_hour(number::Number *n) {
+  ha_work_end_hour_ = n;
+  n->add_on_state_callback([this](float val) { this->set_work_end_hour((int)val); });
+}
+
+void LifeMatrix::set_ha_pomo_rounds(number::Number *n) {
+  ha_pomo_rounds_ = n;
+  n->add_on_state_callback([this](float val) { this->set_pomo_rounds((int)val); });
+}
+
+void LifeMatrix::set_ls_moved_out_entity(number::Number *n) {
+  ls_moved_out_entity_ = n;
+  n->add_on_state_callback([this](float val) { if (!std::isnan(val)) this->update_lifespan_moved_out_age((int)val); });
+}
+
+void LifeMatrix::set_ls_school_years_entity(number::Number *n) {
+  ls_school_years_entity_ = n;
+  n->add_on_state_callback([this](float val) { if (!std::isnan(val)) this->update_lifespan_school_years((int)val); });
+}
+
+void LifeMatrix::set_ls_retirement_entity(number::Number *n) {
+  ls_retirement_entity_ = n;
+  n->add_on_state_callback([this](float val) { if (!std::isnan(val)) this->update_lifespan_retirement_age((int)val); });
+}
+
+void LifeMatrix::set_ls_life_expectancy_entity(number::Number *n) {
+  ls_life_expectancy_entity_ = n;
+  n->add_on_state_callback([this](float val) { this->update_lifespan_life_expectancy((int)val); });
+}
+
+void LifeMatrix::set_ls_phase_cycle_entity(number::Number *n) {
+  ls_phase_cycle_entity_ = n;
+  n->add_on_state_callback([this](float val) { this->update_lifespan_phase_cycle((float)val); });
+}
+
+void LifeMatrix::set_year_events_entity(text::Text *t) {
+  year_events_entity_ = t;
+  t->add_on_state_callback([this](std::string val) { this->update_year_events(val); });
+}
+
+void LifeMatrix::set_exercise_list_entity(text::Text *t) {
+  exercise_list_entity_ = t;
+  t->add_on_state_callback([this](std::string val) { this->update_exercise_list_csv(val); });
+}
+
+void LifeMatrix::set_time_override_entity(text::Text *t) {
+  t->add_on_state_callback([this](std::string val) { this->set_time_override_from_str(val); });
+}
+
+void LifeMatrix::set_pomo_test_phase_entity(text::Text *t) {
+  t->add_on_state_callback([this](std::string val) { this->set_pomo_phase_override(val); });
+}
+
+void LifeMatrix::set_ls_birthday_entity(text::Text *t) {
+  ls_birthday_entity_ = t;
+  t->add_on_state_callback([this](std::string v) { this->update_lifespan_birthday(v); });
+}
+
+void LifeMatrix::set_ls_kids_entity(text::Text *t) {
+  ls_kids_entity_ = t;
+  t->add_on_state_callback([this](std::string v) { this->update_lifespan_kids(v); });
+}
+
+void LifeMatrix::set_ls_parents_entity(text::Text *t) {
+  ls_parents_entity_ = t;
+  t->add_on_state_callback([this](std::string v) { this->update_lifespan_parents(v); });
+}
+
+void LifeMatrix::set_ls_siblings_entity(text::Text *t) {
+  ls_siblings_entity_ = t;
+  t->add_on_state_callback([this](std::string v) { this->update_lifespan_siblings(v); });
+}
+
+void LifeMatrix::set_ls_milestones_entity(text::Text *t) {
+  ls_milestones_entity_ = t;
+  t->add_on_state_callback([this](std::string v) { this->update_lifespan_milestones(v); });
+}
+
+void LifeMatrix::set_ls_partner_ranges_entity(text::Text *t) {
+  ls_partner_ranges_entity_ = t;
+  t->add_on_state_callback([this](std::string v) { this->update_lifespan_partner_ranges(v); });
+}
+
+void LifeMatrix::set_ls_marriage_ranges_entity(text::Text *t) {
+  ls_marriage_ranges_entity_ = t;
+  t->add_on_state_callback([this](std::string v) { this->update_lifespan_marriage_ranges(v); });
+}
+
+void LifeMatrix::set_ha_pomo_start_button(button::Button *b) {
+  b->add_on_press_callback([this]() { this->start_pomodoro(); });
+}
+
+// Helper to restore a text entity from NVS and return the value
+static bool restore_text_from_nvs_(text::Text *entity, const char *key, std::string &out_value) {
+  if (!entity) return false;
+  nvs_handle_t h;
+  esp_err_t err = lm_nvs_open(h, NVS_READONLY);
+  if (err != ESP_OK) {
+    ESP_LOGD("lm_nvs", "NVS open failed for %s: %s", key, esp_err_to_name(err));
+    return false;
+  }
+  char buf[257] = {};
+  size_t sz = sizeof(buf) - 1;
+  err = nvs_get_blob(h, key, buf, &sz);
+  nvs_close(h);
+  if (err == ESP_OK && sz > 0) {
+    out_value.assign(buf, sz);
+    ESP_LOGD("lm_nvs", "Restored %s='%s'", key, out_value.c_str());
+    entity->publish_state(out_value);
+    return true;
+  }
+  return false;
+}
+
+// Helper to restore a number entity from NVS and return the value
+static bool restore_number_from_nvs_(number::Number *entity, const char *key, float &out_value) {
+  if (!entity) return false;
+  nvs_handle_t h;
+  esp_err_t err = lm_nvs_open(h, NVS_READONLY);
+  if (err != ESP_OK) {
+    ESP_LOGD("lm_nvs", "NVS open failed for %s: %s", key, esp_err_to_name(err));
+    return false;
+  }
+  float val = NAN;
+  size_t sz = sizeof(float);
+  err = nvs_get_blob(h, key, &val, &sz);
+  nvs_close(h);
+  if (err == ESP_OK && !std::isnan(val)) {
+    float mn = entity->traits.get_min_value();
+    float mx = entity->traits.get_max_value();
+    if (val < mn || val > mx) {
+      ESP_LOGW("lm_nvs", "NVS %s=%.0f out of range [%.0f,%.0f], using initial", key, val, mn, mx);
+      return false;
+    }
+    out_value = val;
+    ESP_LOGD("lm_nvs", "Restored %s=%.2f", key, val);
+    entity->publish_state(val);
+    return true;
+  }
+  return false;
+}
+
+void LifeMatrix::restore_lifespan_entities_from_nvs_() {
+  ESP_LOGD(TAG, "Restoring entities from NVS...");
+  
+  std::string val_str;
+  float val_num;
+  
+  // Text entities - restore from NVS if exists, then sync to internal config
+  // If no NVS value, publish YAML initial so web interface shows it (triggers callback to save to NVS)
+  if (restore_text_from_nvs_(ls_birthday_entity_, "ls_birthday", val_str)) {
+    set_lifespan_birthday(val_str);
+  } else if (ls_birthday_entity_) {
+    const auto &init = static_cast<LMText*>(ls_birthday_entity_)->get_initial_value();
+    if (!init.empty()) ls_birthday_entity_->publish_state(init);
+  }
+  if (restore_text_from_nvs_(ls_kids_entity_, "ls_kids", val_str)) {
+    set_lifespan_kids(val_str);
+  } else if (ls_kids_entity_) {
+    const auto &init = static_cast<LMText*>(ls_kids_entity_)->get_initial_value();
+    if (!init.empty()) ls_kids_entity_->publish_state(init);
+  }
+  if (restore_text_from_nvs_(ls_parents_entity_, "ls_parents", val_str)) {
+    set_lifespan_parents(val_str);
+  } else if (ls_parents_entity_) {
+    const auto &init = static_cast<LMText*>(ls_parents_entity_)->get_initial_value();
+    if (!init.empty()) ls_parents_entity_->publish_state(init);
+  }
+  if (restore_text_from_nvs_(ls_siblings_entity_, "ls_siblings", val_str)) {
+    set_lifespan_siblings(val_str);
+  } else if (ls_siblings_entity_) {
+    const auto &init = static_cast<LMText*>(ls_siblings_entity_)->get_initial_value();
+    if (!init.empty()) ls_siblings_entity_->publish_state(init);
+  }
+  if (restore_text_from_nvs_(ls_milestones_entity_, "ls_milestones", val_str)) {
+    set_lifespan_milestones(val_str);
+  } else if (ls_milestones_entity_) {
+    const auto &init = static_cast<LMText*>(ls_milestones_entity_)->get_initial_value();
+    if (!init.empty()) ls_milestones_entity_->publish_state(init);
+  }
+  if (restore_text_from_nvs_(ls_partner_ranges_entity_, "ls_partner", val_str)) {
+    set_lifespan_partner_ranges(val_str);
+  } else if (ls_partner_ranges_entity_) {
+    const auto &init = static_cast<LMText*>(ls_partner_ranges_entity_)->get_initial_value();
+    if (!init.empty()) ls_partner_ranges_entity_->publish_state(init);
+  }
+  if (restore_text_from_nvs_(ls_marriage_ranges_entity_, "ls_marriage", val_str)) {
+    set_lifespan_marriage_ranges(val_str);
+  } else if (ls_marriage_ranges_entity_) {
+    const auto &init = static_cast<LMText*>(ls_marriage_ranges_entity_)->get_initial_value();
+    if (!init.empty()) ls_marriage_ranges_entity_->publish_state(init);
+  }
+
+  // Number entities - restore from NVS if exists, then sync to internal config
+  // If no NVS value, publish YAML initial so web interface shows it (triggers callback to save to NVS)
+  if (restore_number_from_nvs_(ls_moved_out_entity_, "ls_moved_out", val_num)) {
+    set_lifespan_moved_out_age((int)val_num);
+  } else if (ls_moved_out_entity_) {
+    float init = static_cast<LMNumber*>(ls_moved_out_entity_)->get_initial_value();
+    if (!std::isnan(init)) ls_moved_out_entity_->publish_state(init);
+  }
+  if (restore_number_from_nvs_(ls_school_years_entity_, "ls_school_yr", val_num)) {
+    set_lifespan_school_years((int)val_num);
+  } else if (ls_school_years_entity_) {
+    float init = static_cast<LMNumber*>(ls_school_years_entity_)->get_initial_value();
+    if (!std::isnan(init)) ls_school_years_entity_->publish_state(init);
+  }
+  if (restore_number_from_nvs_(ls_retirement_entity_, "ls_retirement", val_num)) {
+    set_lifespan_retirement_age((int)val_num);
+  } else if (ls_retirement_entity_) {
+    float init = static_cast<LMNumber*>(ls_retirement_entity_)->get_initial_value();
+    if (!std::isnan(init)) ls_retirement_entity_->publish_state(init);
+  }
+  if (restore_number_from_nvs_(ls_life_expectancy_entity_, "ls_life_exp", val_num)) {
+    set_lifespan_life_expectancy((int)val_num);
+  } else if (ls_life_expectancy_entity_) {
+    float init = static_cast<LMNumber*>(ls_life_expectancy_entity_)->get_initial_value();
+    if (!std::isnan(init)) ls_life_expectancy_entity_->publish_state(init);
+  }
+  if (restore_number_from_nvs_(ls_phase_cycle_entity_, "ls_phase_cyc", val_num)) {
+    set_lifespan_phase_cycle(val_num);
+  } else if (ls_phase_cycle_entity_) {
+    float init = static_cast<LMNumber*>(ls_phase_cycle_entity_)->get_initial_value();
+    if (!std::isnan(init)) ls_phase_cycle_entity_->publish_state(init);
+  }
+  
+  // Screen switches - use hash-based keys
+  nvs_handle_t h;
+  if (lm_nvs_open(h, NVS_READONLY) == ESP_OK) {
+    for (int i = 0; i < 8; i++) {
+      if (screen_switches_[i]) {
+        char key[12];
+        lm_nvs_key(key, screen_switches_[i]->get_object_id_hash() ^ 0x5753U);
+        uint8_t val;
+        if (nvs_get_u8(h, key, &val) == ESP_OK) {
+          ESP_LOGD("lm_nvs", "Restored screen %d switch: %s", i, val ? "ON" : "OFF");
+          if (val) screen_switches_[i]->turn_on();
+          else screen_switches_[i]->turn_off();
+        } else {
+          // No NVS value → publish default from restore_mode
+          static_cast<LMSwitch*>(screen_switches_[i])->publish_initial_state();
+        }
+      }
+    }
+    // Config switches: NVS restore with fallback to restore_mode default
+    switch_::Switch *cfg_sw[] = {ha_show_future_, ha_complex_patterns_, ha_exercise_snacks_};
+    for (auto *sw : cfg_sw) {
+      if (!sw) continue;
+      char key[12];
+      lm_nvs_key(key, sw->get_object_id_hash() ^ 0x5753U);
+      uint8_t val;
+      if (nvs_get_u8(h, key, &val) == ESP_OK) {
+        if (val) sw->turn_on(); else sw->turn_off();
+      } else {
+        static_cast<LMSwitch*>(sw)->publish_initial_state();
+      }
+    }
+    nvs_close(h);
+  }
+  
+  // year_events: NVS-saved value takes priority; fall back to YAML initial
+  if (restore_text_from_nvs_(year_events_entity_, "year_events", val_str)) {
+    set_year_events(val_str);
+  } else if (year_events_entity_) {
+    const auto &init = static_cast<LMText*>(year_events_entity_)->get_initial_value();
+    if (!init.empty()) year_events_entity_->publish_state(init);
+  }
+  // exercise_list: NVS-saved value takes priority; fall back to YAML initial
+  if (restore_text_from_nvs_(exercise_list_entity_, "exercise_list", val_str)) {
+    set_exercise_list_csv(val_str);
+  } else if (exercise_list_entity_) {
+    const auto &init = static_cast<LMText*>(exercise_list_entity_)->get_initial_value();
+    if (!init.empty()) exercise_list_entity_->publish_state(init);
+  }
+
+  // Restore HA number entities: NVS-saved value takes priority; fall back to YAML initial
+  auto pub_num = [](number::Number *n) {
+    if (!n) return;
+    nvs_handle_t h;
+    if (lm_nvs_open(h, NVS_READONLY) == ESP_OK) {
+      char key[12];
+      lm_nvs_key(key, n->get_object_id_hash() ^ 0x4E4DU);
+      float val = NAN;
+      size_t sz = sizeof(float);
+      if (nvs_get_blob(h, key, &val, &sz) == ESP_OK && !std::isnan(val)) {
+        nvs_close(h);
+        n->publish_state(val);
+        return;
+      }
+      nvs_close(h);
+    }
+    float init = static_cast<LMNumber*>(n)->get_initial_value();
+    if (!std::isnan(init)) n->publish_state(init);
+  };
+  pub_num(ha_bed_time_hour_);
+  pub_num(ha_work_start_hour_);
+  pub_num(ha_work_end_hour_);
+  pub_num(ha_cycle_time_);
+  pub_num(ha_display_brightness_);
+  pub_num(ha_night_mode_level_);
+  pub_num(ha_pomo_rounds_);
+
+  // Restore HA select entities: NVS-saved index takes priority; fall back to YAML initial
+  auto pub_sel = [](select::Select *s) {
+    if (!s) return;
+    auto *lms = static_cast<LMSelect*>(s);
+    nvs_handle_t h;
+    if (lm_nvs_open(h, NVS_READONLY) == ESP_OK) {
+      char key[12];
+      lm_nvs_key(key, s->get_object_id_hash() ^ 0x4C53U);
+      uint8_t idx = 255;
+      if (nvs_get_u8(h, key, &idx) == ESP_OK) {
+        const auto &opts = lms->traits.get_options();
+        if (idx < opts.size()) {
+          nvs_close(h);
+          s->publish_state(std::string(opts[idx]));
+          return;
+        }
+      }
+      nvs_close(h);
+    }
+    const auto &init = lms->get_initial_option();
+    if (!init.empty()) s->publish_state(init);
+  };
+  pub_sel(ha_style_);
+  pub_sel(ha_gradient_type_);
+  pub_sel(ha_fill_direction_);
+  pub_sel(ha_marker_style_);
+  pub_sel(ha_marker_color_);
+  pub_sel(ha_text_area_position_);
+  pub_sel(ha_day_fill_);
+  pub_sel(ha_year_event_style_);
+  pub_sel(ha_conway_speed_);
+  pub_sel(ha_pomo_preset_);
+
+  // Refresh lifespan data with any restored values
+  apply_lifespan_year_events();
+  precompute_lifespan_phases();
+  
+  ESP_LOGD(TAG, "Entity restoration complete");
+}
+
 
 }  // namespace life_matrix
 }  // namespace esphome

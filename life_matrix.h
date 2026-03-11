@@ -11,15 +11,139 @@
 #include "esphome/components/switch/switch.h"
 #include "esphome/components/number/number.h"
 #include "esphome/components/text_sensor/text_sensor.h"
+#include "esphome/components/text/text.h"
+#include "esphome/components/button/button.h"
+#include "nvs.h"
 #include <algorithm>
 #include <array>
 #include <functional>
 #include <vector>
 #include <string>
 #include <map>
+#include <cmath>
 
 namespace esphome {
 namespace life_matrix {
+
+// ---------------------------------------------------------------------------
+// Minimal entity implementations for auto-generated HA entities
+// (avoids dependency on esphome/components/template/* sub-components)
+// ---------------------------------------------------------------------------
+
+// Helper: open our dedicated NVS namespace for life_matrix settings.
+// Using a fixed namespace avoids collisions with ESPHome's own preferences
+// and makes keys stable regardless of component registration order.
+static inline esp_err_t lm_nvs_open(nvs_handle_t &handle, nvs_open_mode_t mode) {
+  return nvs_open("lm_cfg", mode, &handle);
+}
+// Build a stable 8-char NVS key from an entity's object_id hash + type salt.
+static inline void lm_nvs_key(char *buf, uint32_t hash) {
+  snprintf(buf, 12, "%08" PRIX32, hash);
+}
+
+class LMSwitch : public switch_::Switch {
+ public:
+  void publish_initial_state() {
+    bool initial = (this->restore_mode == switch_::SwitchRestoreMode::SWITCH_RESTORE_DEFAULT_ON);
+    if (this->restore_mode == switch_::SwitchRestoreMode::SWITCH_ALWAYS_ON) initial = true;
+    if (initial) this->turn_on(); else this->turn_off();
+  }
+  void write_state(bool state) override {
+    this->publish_state(state);
+    if (this->restore_mode == switch_::SwitchRestoreMode::SWITCH_RESTORE_DEFAULT_ON ||
+        this->restore_mode == switch_::SwitchRestoreMode::SWITCH_RESTORE_DEFAULT_OFF) {
+      nvs_handle_t h;
+      if (lm_nvs_open(h, NVS_READWRITE) == ESP_OK) {
+        char key[12];
+        lm_nvs_key(key, this->get_object_id_hash() ^ 0x5753U);
+        nvs_set_u8(h, key, (uint8_t)state);
+        nvs_commit(h);
+        nvs_close(h);
+      }
+    }
+  }
+  void set_optimistic(bool) {}
+};
+
+class LMSelect : public select::Select {
+ public:
+  void control(const std::string &value) override {
+    this->publish_state(value);
+    if (!this->restore_value_) return;
+    nvs_handle_t h;
+    if (lm_nvs_open(h, NVS_READWRITE) == ESP_OK) {
+      char key[12];
+      lm_nvs_key(key, this->get_object_id_hash() ^ 0x4C53U);
+      const auto &opts = this->traits.get_options();
+      for (size_t i = 0; i < opts.size(); i++) {
+        if (std::string(opts[i]) == value) { nvs_set_u8(h, key, (uint8_t)i); break; }
+      }
+      nvs_commit(h);
+      nvs_close(h);
+    }
+  }
+  void set_restore_value(bool v) { restore_value_ = v; }
+  void set_options(std::initializer_list<const char*> opts) { this->traits.set_options(opts); }
+  void set_initial_option(const std::string &s) { initial_option_ = s; }
+  const std::string &get_initial_option() const { return initial_option_; }
+  void set_optimistic(bool) {}
+ protected:
+  bool restore_value_{false};
+  std::string initial_option_;
+};
+
+class LMNumber : public number::Number {
+ public:
+  void control(float value) override {
+    this->publish_state(value);
+    if (!this->restore_value_) return;
+    nvs_handle_t h;
+    if (lm_nvs_open(h, NVS_READWRITE) == ESP_OK) {
+      char key[12];
+      lm_nvs_key(key, this->get_object_id_hash() ^ 0x4E4DU);
+      nvs_set_blob(h, key, &value, sizeof(float));
+      nvs_commit(h);
+      nvs_close(h);
+    }
+  }
+  void set_restore_value(bool v) { restore_value_ = v; }
+  void set_initial_value(float v) { initial_value_ = v; }
+  float get_initial_value() const { return initial_value_; }
+  void set_mode(number::NumberMode m) { this->traits.set_mode(m); }
+  void set_optimistic(bool) {}
+ protected:
+  bool restore_value_{false};
+  float initial_value_{NAN};
+};
+
+class LMText : public text::Text {
+ public:
+  void control(const std::string &value) override {
+    this->publish_state(value);
+    if (!this->restore_value_) return;
+    nvs_handle_t h;
+    if (lm_nvs_open(h, NVS_READWRITE) == ESP_OK) {
+      char key[12];
+      lm_nvs_key(key, this->get_object_id_hash() ^ 0x5458U);
+      nvs_set_blob(h, key, value.c_str(), value.size());
+      nvs_commit(h);
+      nvs_close(h);
+    }
+  }
+  void set_restore_value(bool v) { restore_value_ = v; }
+  void set_initial_value(const std::string &s) { initial_value_ = s; }
+  const std::string &get_initial_value() const { return initial_value_; }
+  void set_mode(text::TextMode m) { this->traits.set_mode(m); }
+  void set_optimistic(bool) {}
+ protected:
+  bool restore_value_{false};
+  std::string initial_value_;
+};
+
+class LMButton : public button::Button {
+ public:
+  void press_action() override {}
+};
 
 // Grid dimensions (after 90° rotation: 32w × 120h)
 static const int GRID_WIDTH = 32;
@@ -308,19 +432,43 @@ class LifeMatrix : public Component {
   void set_lifespan_phase_cycle(float seconds) { lifespan_config_.phase_cycle_s = seconds; }
   void refresh_lifespan() { apply_lifespan_year_events(); precompute_lifespan_phases(); }
 
+  // NVS save helpers for lifespan entities
+  void save_to_nvs(const char *key, const std::string &value) {
+    nvs_handle_t h;
+    if (lm_nvs_open(h, NVS_READWRITE) == ESP_OK) {
+      nvs_set_blob(h, key, value.c_str(), value.size());
+      nvs_commit(h);
+      nvs_close(h);
+      ESP_LOGD("lm_nvs", "Saved %s='%s'", key, value.c_str());
+    }
+  }
+  void save_to_nvs(const char *key, float value) {
+    nvs_handle_t h;
+    if (lm_nvs_open(h, NVS_READWRITE) == ESP_OK) {
+      nvs_set_blob(h, key, &value, sizeof(float));
+      nvs_commit(h);
+      nvs_close(h);
+      ESP_LOGD("lm_nvs", "Saved %s=%.2f", key, value);
+    }
+  }
+
   // Lifespan setters that also refresh (for on_value callbacks)
-  void update_lifespan_birthday(const std::string &d)      { set_lifespan_birthday(d);       refresh_lifespan(); }
-  void update_lifespan_kids(const std::string &d)          { set_lifespan_kids(d);           refresh_lifespan(); }
-  void update_lifespan_parents(const std::string &d)       { set_lifespan_parents(d);        refresh_lifespan(); }
-  void update_lifespan_siblings(const std::string &d)      { set_lifespan_siblings(d);       refresh_lifespan(); }
-  void update_lifespan_milestones(const std::string &d)    { set_lifespan_milestones(d);     refresh_lifespan(); }
-  void update_lifespan_partner_ranges(const std::string &d){ set_lifespan_partner_ranges(d); refresh_lifespan(); }
-  void update_lifespan_marriage_ranges(const std::string &d){ set_lifespan_marriage_ranges(d); refresh_lifespan(); }
-  void update_lifespan_moved_out_age(int v)    { set_lifespan_moved_out_age(v);    refresh_lifespan(); }
-  void update_lifespan_school_years(int v)     { set_lifespan_school_years(v);     refresh_lifespan(); }
-  void update_lifespan_retirement_age(int v)   { set_lifespan_retirement_age(v);   refresh_lifespan(); }
-  void update_lifespan_life_expectancy(int v)  { set_lifespan_life_expectancy(v);  refresh_lifespan(); }
-  void update_lifespan_phase_cycle(float v)    { set_lifespan_phase_cycle(v);      refresh_lifespan(); }
+  void update_lifespan_birthday(const std::string &d)      { set_lifespan_birthday(d);       save_to_nvs("ls_birthday", d);    refresh_lifespan(); }
+  void update_lifespan_kids(const std::string &d)          { set_lifespan_kids(d);           save_to_nvs("ls_kids", d);        refresh_lifespan(); }
+  void update_lifespan_parents(const std::string &d)       { set_lifespan_parents(d);        save_to_nvs("ls_parents", d);     refresh_lifespan(); }
+  void update_lifespan_siblings(const std::string &d)      { set_lifespan_siblings(d);       save_to_nvs("ls_siblings", d);    refresh_lifespan(); }
+  void update_lifespan_milestones(const std::string &d)    { set_lifespan_milestones(d);     save_to_nvs("ls_milestones", d);  refresh_lifespan(); }
+  void update_lifespan_partner_ranges(const std::string &d){ set_lifespan_partner_ranges(d); save_to_nvs("ls_partner", d);     refresh_lifespan(); }
+  void update_lifespan_marriage_ranges(const std::string &d){ set_lifespan_marriage_ranges(d); save_to_nvs("ls_marriage", d);    refresh_lifespan(); }
+  void update_lifespan_moved_out_age(int v)    { set_lifespan_moved_out_age(v);    save_to_nvs("ls_moved_out", (float)v);    refresh_lifespan(); }
+  void update_lifespan_school_years(int v)     { set_lifespan_school_years(v);     save_to_nvs("ls_school_yr", (float)v);     refresh_lifespan(); }
+  void update_lifespan_retirement_age(int v)   { set_lifespan_retirement_age(v);   save_to_nvs("ls_retirement", (float)v);    refresh_lifespan(); }
+  void update_lifespan_life_expectancy(int v)  { set_lifespan_life_expectancy(v);  save_to_nvs("ls_life_exp", (float)v);      refresh_lifespan(); }
+  void update_lifespan_phase_cycle(float v)    { set_lifespan_phase_cycle(v);      save_to_nvs("ls_phase_cyc", v);            refresh_lifespan(); }
+
+  // Year events / exercise list updaters (NVS-backed, for on_value callbacks)
+  void update_year_events(const std::string &v)       { set_year_events(v);        save_to_nvs("year_events", v);   apply_lifespan_year_events(); }
+  void update_exercise_list_csv(const std::string &v) { set_exercise_list_csv(v);  save_to_nvs("exercise_list", v); }
 
   // Input handlers — called directly from YAML encoder/button on_press
   void enc1_clockwise();
@@ -334,6 +482,7 @@ class LifeMatrix : public Component {
 
   // Screen management
   void register_screen(int screen_id, bool enabled);
+  void add_screen_switch(int screen_id, switch_::Switch *sw);
   void next_screen();
   void prev_screen();
   void set_current_screen(int screen_idx);
@@ -390,12 +539,6 @@ class LifeMatrix : public Component {
   void set_complex_patterns(bool enable) { game_config_.complex_patterns = enable; }
   void set_game_update_interval(const std::string &speed_str);
 
-  // OTA handling
-  void set_ota_in_progress(bool in_progress) { ota_in_progress_ = in_progress; if (!in_progress) ota_progress_ = 0.0f; }
-  bool is_ota_in_progress() { return ota_in_progress_; }
-  void set_ota_progress(float progress) { ota_progress_ = progress; }
-  float get_ota_progress() { return ota_progress_; }
-
   // Time override for testing
   void set_time_override(const std::string &time_str);
   void set_time_override_from_str(const std::string &s);  // handles empty/"clear"/"off"
@@ -431,36 +574,58 @@ class LifeMatrix : public Component {
   int get_session_elapsed_sec() const;
   PomodoroPresetConfig get_preset_config() const;
 
-  // Pomodoro entity registration (called from YAML on_boot)
-  void set_pomo_preset_entity(select::Select *s) { ha_pomo_preset_ = s; }
-  void set_pomo_rounds_entity(number::Number *n) { ha_pomo_rounds_ = n; }
-  void set_exercise_snacks_entity(switch_::Switch *s) { ha_exercise_snacks_ = s; }
+  // Pomodoro entity registration
+  void set_ha_pomo_preset(select::Select *s);
+  void set_ha_pomo_rounds(number::Number *n);
+  void set_ha_exercise_snacks(switch_::Switch *s);
   void set_pomo_event_sensor(text_sensor::TextSensor *ts) { pomo_event_sensor_ = ts; }
   void set_pomo_exercise_sensor(text_sensor::TextSensor *ts) { pomo_exercise_sensor_ = ts; }
+  void set_ha_pomo_start_button(button::Button *b);
 
   // Night mode brightness control
   void set_base_brightness_pct(float pct);
   void set_night_mode_level(int level);
-  void set_brightness_fn(std::function<void(int)> fn) { brightness_fn_ = std::move(fn); }
+  void set_brightness_fn(std::function<void(uint8_t)> fn) { brightness_fn_ = std::move(fn); }
   void apply_brightness();
+  float get_base_brightness_pct() const { return base_brightness_pct_; }
+  float get_screen_cycle_time()   const { return screen_cycle_time_; }
 
-  // HA entity sync — register entities for bidirectional sync (called from YAML on_boot)
-  void set_ha_complex_patterns(switch_::Switch *sw) { ha_complex_patterns_ = sw; }
-  void set_ha_conway_speed(select::Select *s) { ha_conway_speed_ = s; }
-  void set_ha_style(select::Select *s) { ha_style_ = s; }
-  void set_ha_gradient_type(select::Select *s) { ha_gradient_type_ = s; }
-  void set_ha_fill_direction(select::Select *s) { ha_fill_direction_ = s; }
-  void set_ha_marker_style(select::Select *s) { ha_marker_style_ = s; }
-  void set_ha_marker_color(select::Select *s) { ha_marker_color_ = s; }
-  void set_ha_text_area_position(select::Select *s) { ha_text_area_position_ = s; }
-  void set_ha_day_fill(select::Select *s) { ha_day_fill_ = s; }
-  void set_ha_year_event_style(select::Select *s) { ha_year_event_style_ = s; }
-  void set_ha_bed_time_hour(number::Number *n) { ha_bed_time_hour_ = n; }
-  void set_ha_work_start_hour(number::Number *n) { ha_work_start_hour_ = n; }
-  void set_ha_work_end_hour(number::Number *n) { ha_work_end_hour_ = n; }
-  void set_ha_cycle_time(number::Number *n) { ha_cycle_time_ = n; }
-  void set_ha_display_brightness(number::Number *n) { ha_display_brightness_ = n; }
-  void set_ha_show_future(switch_::Switch *s) { ha_show_future_ = s; }
+  // HA entity sync — register entities, wire callbacks (called from __init__.py to_code)
+  void set_ha_complex_patterns(switch_::Switch *sw);
+  void set_ha_conway_speed(select::Select *s);
+  void set_ha_style(select::Select *s);
+  void set_ha_gradient_type(select::Select *s);
+  void set_ha_fill_direction(select::Select *s);
+  void set_ha_marker_style(select::Select *s);
+  void set_ha_marker_color(select::Select *s);
+  void set_ha_text_area_position(select::Select *s);
+  void set_ha_day_fill(select::Select *s);
+  void set_ha_year_event_style(select::Select *s);
+  void set_ha_bed_time_hour(number::Number *n);
+  void set_ha_work_start_hour(number::Number *n);
+  void set_ha_work_end_hour(number::Number *n);
+  void set_ha_cycle_time(number::Number *n);
+  void set_ha_display_brightness(number::Number *n);
+  void set_ha_night_mode_level(number::Number *n);
+  void set_ha_show_future(switch_::Switch *s);
+
+  // Text / number / button entity wiring (auto-generated entities)
+  void set_year_events_entity(text::Text *t);
+  void set_exercise_list_entity(text::Text *t);
+  void set_time_override_entity(text::Text *t);
+  void set_pomo_test_phase_entity(text::Text *t);
+  void set_ls_birthday_entity(text::Text *t);
+  void set_ls_kids_entity(text::Text *t);
+  void set_ls_parents_entity(text::Text *t);
+  void set_ls_siblings_entity(text::Text *t);
+  void set_ls_milestones_entity(text::Text *t);
+  void set_ls_partner_ranges_entity(text::Text *t);
+  void set_ls_marriage_ranges_entity(text::Text *t);
+  void set_ls_moved_out_entity(number::Number *n);
+  void set_ls_school_years_entity(number::Number *n);
+  void set_ls_retirement_entity(number::Number *n);
+  void set_ls_life_expectancy_entity(number::Number *n);
+  void set_ls_phase_cycle_entity(number::Number *n);
 
   // Icon management (called from Python __init__.py)
   void register_icon_frames(const std::string &icon_id, const uint16_t *data, uint8_t frame_count, std::vector<uint16_t> durations);
@@ -505,6 +670,7 @@ class LifeMatrix : public Component {
   YearEventStyle year_event_style_{YEAR_EVENT_MARKERS};
 
   // Screen management
+  switch_::Switch *screen_switches_[8]{nullptr};
   std::vector<ScreenConfig> screens_;
   std::vector<int> enabled_screen_ids_;
   int current_screen_idx_{0};
@@ -644,10 +810,6 @@ class LifeMatrix : public Component {
   switch_::Switch *ha_exercise_snacks_{nullptr};
   text_sensor::TextSensor *pomo_event_sensor_{nullptr};
   text_sensor::TextSensor *pomo_exercise_sensor_{nullptr};
-  // OTA state
-  bool ota_in_progress_{false};
-  float ota_progress_{0.0f};
-
   // Time override for testing
   bool time_override_active_{false};
   ESPTime fake_time_{};
@@ -657,7 +819,7 @@ class LifeMatrix : public Component {
   float base_brightness_pct_{20.0f};
   int night_mode_level_{0};
   uint8_t last_brightness_hour_{255};
-  std::function<void(int)> brightness_fn_;
+  std::function<void(uint8_t)> brightness_fn_;
 
   // HA entity pointers for bidirectional sync
   switch_::Switch *ha_complex_patterns_{nullptr};
@@ -675,7 +837,29 @@ class LifeMatrix : public Component {
   number::Number *ha_work_end_hour_{nullptr};
   number::Number *ha_cycle_time_{nullptr};
   number::Number *ha_display_brightness_{nullptr};
+  number::Number *ha_night_mode_level_{nullptr};
   switch_::Switch *ha_show_future_{nullptr};
+
+  // Non-lifespan entities needing initial-value publish
+  text::Text *year_events_entity_{nullptr};
+  text::Text *exercise_list_entity_{nullptr};
+
+  // Lifespan entities (stored for NVS restoration)
+  text::Text *ls_birthday_entity_{nullptr};
+  text::Text *ls_kids_entity_{nullptr};
+  text::Text *ls_parents_entity_{nullptr};
+  text::Text *ls_siblings_entity_{nullptr};
+  text::Text *ls_milestones_entity_{nullptr};
+  text::Text *ls_partner_ranges_entity_{nullptr};
+  text::Text *ls_marriage_ranges_entity_{nullptr};
+  number::Number *ls_moved_out_entity_{nullptr};
+  number::Number *ls_school_years_entity_{nullptr};
+  number::Number *ls_retirement_entity_{nullptr};
+  number::Number *ls_life_expectancy_entity_{nullptr};
+  number::Number *ls_phase_cycle_entity_{nullptr};
+
+  // Helper to restore lifespan entities from NVS
+  void restore_lifespan_entities_from_nvs_();
 
   // Icon registry: maps icon_id string to animated icon data
   std::map<std::string, IconData> icon_registry_;
