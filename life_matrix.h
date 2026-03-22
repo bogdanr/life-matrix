@@ -43,6 +43,25 @@ static inline void lm_nvs_key(char *buf, uint32_t hash) {
 
 class LMSwitch : public switch_::Switch {
  public:
+  // ESPHome 2026+ removed runtime set_name/set_icon/set_entity_category from EntityBase.
+  // These shims store values and apply them via configure_entity_() in finalize_entity_config().
+  void set_name(const std::string &name) { lm_name_ = name; }
+  void set_icon(const std::string & /*icon*/) {}  // icon string pool not accessible here
+  void set_entity_category(uint8_t cat) { lm_entity_cat_ = cat; }
+  void finalize_entity_config(const std::string &object_id = "", bool internal = false) {
+    const std::string &src = object_id.empty() ? lm_name_ : object_id;
+    std::string oid;
+    for (char c : src) {
+      if (isalnum((unsigned char)c)) oid += tolower((unsigned char)c);
+      else if (!oid.empty() && oid.back() != '_') oid += '_';
+    }
+    while (!oid.empty() && oid.back() == '_') oid.pop_back();
+    uint32_t hash = 2166136261UL;
+    for (char c : oid) hash = (hash * 16777619UL) ^ (uint8_t)c;
+    uint32_t fields = ((uint32_t)lm_entity_cat_ << 26) | (internal ? (1u << 24) : 0u);
+    this->configure_entity_(lm_name_.c_str(), hash, fields);
+  }
+
   void publish_initial_state() {
     bool initial = (this->restore_mode == switch_::SwitchRestoreMode::SWITCH_RESTORE_DEFAULT_ON);
     if (this->restore_mode == switch_::SwitchRestoreMode::SWITCH_ALWAYS_ON) initial = true;
@@ -63,10 +82,30 @@ class LMSwitch : public switch_::Switch {
     }
   }
   void set_optimistic(bool) {}
+ private:
+  std::string lm_name_;
+  uint8_t lm_entity_cat_{0};
 };
 
 class LMSelect : public select::Select {
  public:
+  void set_name(const std::string &name) { lm_name_ = name; }
+  void set_icon(const std::string & /*icon*/) {}
+  void set_entity_category(uint8_t cat) { lm_entity_cat_ = cat; }
+  void finalize_entity_config(const std::string &object_id = "", bool internal = false) {
+    const std::string &src = object_id.empty() ? lm_name_ : object_id;
+    std::string oid;
+    for (char c : src) {
+      if (isalnum((unsigned char)c)) oid += tolower((unsigned char)c);
+      else if (!oid.empty() && oid.back() != '_') oid += '_';
+    }
+    while (!oid.empty() && oid.back() == '_') oid.pop_back();
+    uint32_t hash = 2166136261UL;
+    for (char c : oid) hash = (hash * 16777619UL) ^ (uint8_t)c;
+    uint32_t fields = ((uint32_t)lm_entity_cat_ << 26) | (internal ? (1u << 24) : 0u);
+    this->configure_entity_(lm_name_.c_str(), hash, fields);
+  }
+
   void control(const std::string &value) override {
     this->publish_state(value);
     if (!this->restore_value_) return;
@@ -90,10 +129,30 @@ class LMSelect : public select::Select {
  protected:
   bool restore_value_{false};
   std::string initial_option_;
+  std::string lm_name_;
+  uint8_t lm_entity_cat_{0};
 };
 
 class LMNumber : public number::Number {
  public:
+  void set_name(const std::string &name) { lm_name_ = name; }
+  void set_icon(const std::string & /*icon*/) {}
+  void set_entity_category(uint8_t cat) { lm_entity_cat_ = cat; }
+  void set_unit_of_measurement(const std::string & /*unit*/) {}  // UOM pool not accessible here
+  void finalize_entity_config(const std::string &object_id = "", bool internal = false) {
+    const std::string &src = object_id.empty() ? lm_name_ : object_id;
+    std::string oid;
+    for (char c : src) {
+      if (isalnum((unsigned char)c)) oid += tolower((unsigned char)c);
+      else if (!oid.empty() && oid.back() != '_') oid += '_';
+    }
+    while (!oid.empty() && oid.back() == '_') oid.pop_back();
+    uint32_t hash = 2166136261UL;
+    for (char c : oid) hash = (hash * 16777619UL) ^ (uint8_t)c;
+    uint32_t fields = ((uint32_t)lm_entity_cat_ << 26) | (internal ? (1u << 24) : 0u);
+    this->configure_entity_(lm_name_.c_str(), hash, fields);
+  }
+
   void control(float value) override {
     this->publish_state(value);
     if (!this->restore_value_) return;
@@ -114,10 +173,29 @@ class LMNumber : public number::Number {
  protected:
   bool restore_value_{false};
   float initial_value_{NAN};
+  std::string lm_name_;
+  uint8_t lm_entity_cat_{0};
 };
 
 class LMText : public text::Text {
  public:
+  void set_name(const std::string &name) { lm_name_ = name; }
+  void set_icon(const std::string & /*icon*/) {}
+  void set_entity_category(uint8_t cat) { lm_entity_cat_ = cat; }
+  void finalize_entity_config(const std::string &object_id = "", bool internal = false) {
+    const std::string &src = object_id.empty() ? lm_name_ : object_id;
+    std::string oid;
+    for (char c : src) {
+      if (isalnum((unsigned char)c)) oid += tolower((unsigned char)c);
+      else if (!oid.empty() && oid.back() != '_') oid += '_';
+    }
+    while (!oid.empty() && oid.back() == '_') oid.pop_back();
+    uint32_t hash = 2166136261UL;
+    for (char c : oid) hash = (hash * 16777619UL) ^ (uint8_t)c;
+    uint32_t fields = ((uint32_t)lm_entity_cat_ << 26) | (internal ? (1u << 24) : 0u);
+    this->configure_entity_(lm_name_.c_str(), hash, fields);
+  }
+
   void control(const std::string &value) override {
     this->publish_state(value);
     if (!this->restore_value_) return;
@@ -138,11 +216,32 @@ class LMText : public text::Text {
  protected:
   bool restore_value_{false};
   std::string initial_value_;
+  std::string lm_name_;
+  uint8_t lm_entity_cat_{0};
 };
 
 class LMButton : public button::Button {
  public:
+  void set_name(const std::string &name) { lm_name_ = name; }
+  void set_icon(const std::string & /*icon*/) {}
+  void set_entity_category(uint8_t cat) { lm_entity_cat_ = cat; }
+  void finalize_entity_config(const std::string &object_id = "", bool internal = false) {
+    const std::string &src = object_id.empty() ? lm_name_ : object_id;
+    std::string oid;
+    for (char c : src) {
+      if (isalnum((unsigned char)c)) oid += tolower((unsigned char)c);
+      else if (!oid.empty() && oid.back() != '_') oid += '_';
+    }
+    while (!oid.empty() && oid.back() == '_') oid.pop_back();
+    uint32_t hash = 2166136261UL;
+    for (char c : oid) hash = (hash * 16777619UL) ^ (uint8_t)c;
+    uint32_t fields = ((uint32_t)lm_entity_cat_ << 26) | (internal ? (1u << 24) : 0u);
+    this->configure_entity_(lm_name_.c_str(), hash, fields);
+  }
   void press_action() override {}
+ private:
+  std::string lm_name_;
+  uint8_t lm_entity_cat_{0};
 };
 
 // Grid dimensions (after 90° rotation: 32w × 120h)

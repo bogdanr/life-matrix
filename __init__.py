@@ -251,8 +251,42 @@ CONFIG_SCHEMA = cv.Schema({
 # Entity generation helpers
 # ---------------------------------------------------------------------------
 
-ENTITY_CATEGORY_CONFIG = cg.RawExpression("esphome::ENTITY_CATEGORY_CONFIG")
-ENTITY_CATEGORY_NONE   = cg.RawExpression("esphome::ENTITY_CATEGORY_NONE")
+ENTITY_CATEGORY_CONFIG     = cg.RawExpression("esphome::ENTITY_CATEGORY_CONFIG")
+ENTITY_CATEGORY_DIAGNOSTIC = cg.RawExpression("esphome::ENTITY_CATEGORY_DIAGNOSTIC")
+ENTITY_CATEGORY_NONE       = cg.RawExpression("esphome::ENTITY_CATEGORY_NONE")
+
+# ---------------------------------------------------------------------------
+# Helpers for configure_entity_() — used for text sensors which use the raw
+# TextSensor class (no LMTextSensor subclass) so we call configure_entity_()
+# directly from setup() which is a friend of EntityBase.
+# ---------------------------------------------------------------------------
+
+def _make_object_id(name: str) -> str:
+    """Convert 'My Entity Name' → 'my_entity_name' (ESPHome object_id convention)."""
+    result = ""
+    for c in name.lower():
+        if c.isalnum():
+            result += c
+        elif result and result[-1] != '_':
+            result += '_'
+    return result.rstrip('_')
+
+
+def _fnv1_hash(s: str) -> int:
+    """FNV-1 32-bit hash of a string (same algorithm as ESPHome uses for object_id_hash)."""
+    h = 2166136261
+    for c in s:
+        h = ((h * 16777619) ^ ord(c)) & 0xFFFFFFFF
+    return h
+
+
+def _configure_text_sensor(var, name: str, internal: bool = False) -> None:
+    """Emit configure_entity_() on a raw TextSensor (called inside setup() which is a friend)."""
+    oid = _make_object_id(name)
+    hash_val = _fnv1_hash(oid)
+    # entity_fields: bit 24 = internal, bits 26-27 = entity_category (0=NONE)
+    fields = (1 << 24) if internal else 0
+    cg.add(var.configure_entity_(name, hash_val, fields))
 
 
 async def gen_switch(obj_id, name, icon, restore_on=True):
@@ -260,10 +294,10 @@ async def gen_switch(obj_id, name, icon, restore_on=True):
     id_ = cv.declare_id(LMSwitch)(obj_id)
     var = cg.new_Pvariable(id_)
     cg.add(var.set_name(name))
-    # set_object_id removed in this ESPHome version; name auto-derives object_id
     if icon:
         cg.add(var.set_icon(icon))
     cg.add(var.set_entity_category(ENTITY_CATEGORY_CONFIG))
+    cg.add(var.finalize_entity_config(obj_id))
     mode = SwitchRestoreMode.SWITCH_RESTORE_DEFAULT_ON if restore_on else SwitchRestoreMode.SWITCH_RESTORE_DEFAULT_OFF
     cg.add(var.set_restore_mode(mode))
     cg.add(var.set_optimistic(True))
@@ -277,11 +311,10 @@ async def gen_select(obj_id, name, icon, options, initial):
     id_ = cv.declare_id(LMSelect)(obj_id)
     var = cg.new_Pvariable(id_)
     cg.add(var.set_name(name))
-    # set_object_id removed in this ESPHome version; name auto-derives object_id
     if icon:
         cg.add(var.set_icon(icon))
     cg.add(var.set_entity_category(ENTITY_CATEGORY_CONFIG))
-    
+    cg.add(var.finalize_entity_config(obj_id))
     cg.add(var.set_optimistic(True))
     cg.add(var.set_restore_value(True))
     cg.add(var.set_options(options))
@@ -291,21 +324,21 @@ async def gen_select(obj_id, name, icon, options, initial):
     return var
 
 
-async def gen_number(obj_id, name, icon, mn, mx, step, initial, unit=""):
+async def gen_number(obj_id, name, icon, mn, mx, step, initial, unit="", category=None):
     """Generate an LMNumber with the given parameters."""
+    if category is None:
+        category = ENTITY_CATEGORY_CONFIG
     id_ = cv.declare_id(LMNumber)(obj_id)
     var = cg.new_Pvariable(id_)
     cg.add(var.set_name(name))
-    # set_object_id removed in this ESPHome version; name auto-derives object_id
     if icon:
         cg.add(var.set_icon(icon))
-    cg.add(var.set_entity_category(ENTITY_CATEGORY_CONFIG))
-    
+    cg.add(var.set_entity_category(category))
+    cg.add(var.finalize_entity_config(obj_id))
     cg.add(var.traits.set_min_value(mn))
     cg.add(var.traits.set_max_value(mx))
     cg.add(var.traits.set_step(step))
-    if unit:
-        cg.add(var.traits.set_unit_of_measurement(unit))
+    # set_unit_of_measurement removed from NumberTraits in ESPHome 2026+; UOM not shown in HA
     cg.add(var.set_initial_value(float(initial)))
     cg.add(var.set_restore_value(True))
     cg.add(var.set_optimistic(True))
@@ -315,16 +348,20 @@ async def gen_number(obj_id, name, icon, mn, mx, step, initial, unit=""):
     return var
 
 
-async def gen_text(obj_id, name, icon, initial=""):
+async def gen_text(obj_id, name, icon, initial="", category=None, internal=False):
     """Generate an LMText with the given parameters."""
+    if category is None:
+        category = ENTITY_CATEGORY_CONFIG
     id_ = cv.declare_id(LMText)(obj_id)
     var = cg.new_Pvariable(id_)
     cg.add(var.set_name(name))
-    # set_object_id removed in this ESPHome version; name auto-derives object_id
     if icon:
         cg.add(var.set_icon(icon))
-    cg.add(var.set_entity_category(ENTITY_CATEGORY_CONFIG))
-    
+    if internal:
+        cg.add(var.finalize_entity_config(obj_id, True))
+    else:
+        cg.add(var.set_entity_category(category))
+        cg.add(var.finalize_entity_config(obj_id))
     cg.add(var.set_optimistic(True))
     cg.add(var.set_restore_value(True))
     cg.add(var.set_mode(TextMode.TEXT_MODE_TEXT))
@@ -342,10 +379,10 @@ async def gen_button(obj_id, name, icon):
     id_ = cv.declare_id(LMButton)(obj_id)
     var = cg.new_Pvariable(id_)
     cg.add(var.set_name(name))
-    # set_object_id removed in this ESPHome version; name auto-derives object_id
     if icon:
         cg.add(var.set_icon(icon))
     cg.add(var.set_entity_category(ENTITY_CATEGORY_NONE))
+    cg.add(var.finalize_entity_config(obj_id))
     CORE.component_ids.add(obj_id)
     cg.add(cg.App.register_button(var))
     return var
@@ -356,54 +393,54 @@ async def gen_button(obj_id, name, icon):
 # ---------------------------------------------------------------------------
 
 SCREEN_SWITCHES = [
-    (0, "Show Year View",     "show_year",     "mdi:calendar",           True),
-    (1, "Show Month View",    "show_month",    "mdi:calendar-month",     True),
-    (2, "Show Day View",      "show_day",      "mdi:calendar-today",     True),
-    (3, "Show Hour View",     "show_hour",     "mdi:clock-outline",      True),
-    (4, "Show Habits View",   "show_habits",   "mdi:format-list-checks", False),
-    (5, "Show Lifespan View", "show_lifespan", "mdi:timeline-clock",     True),
-    (6, "Show Game of Life",  "show_conway",   "mdi:grid",               True),
-    (7, "Show Pomodoro",      "show_pomodoro", "mdi:timer",              False),
+    (0, "Screens: Year View",     "show_year",     "mdi:calendar",           True),
+    (1, "Screens: Month View",    "show_month",    "mdi:calendar-month",     True),
+    (2, "Screens: Day View",      "show_day",      "mdi:calendar-today",     True),
+    (3, "Screens: Hour View",     "show_hour",     "mdi:clock-outline",      True),
+    (4, "Screens: Habits View",   "show_habits",   "mdi:format-list-checks", False),
+    (5, "Screens: Lifespan View", "show_lifespan", "mdi:timeline-clock",     True),
+    (6, "Screens: Game of Life",  "show_conway",   "mdi:grid",               True),
+    (7, "Screens: Pomodoro",      "show_pomodoro", "mdi:timer",              False),
 ]
 
 # (obj_id, name, icon, options, conf_key, setter)
 SELECTS = [
-    ("text_area_position", "Text Area Position", "mdi:format-align-top",
+    ("text_area_position", "Appearance: Text Area",      "mdi:format-align-top",
      ["Top", "Bottom", "None"], CONF_TEXT_AREA_POSITION,
      "set_ha_text_area_position"),
-    ("fill_direction", "Fill Direction", "mdi:arrow-up-down",
+    ("fill_direction", "Appearance: Fill Direction", "mdi:arrow-up-down",
      ["Bottom to Top", "Top to Bottom"], CONF_FILL_DIRECTION,
      "set_ha_fill_direction"),
-    ("gradient_type", "Gradient Type", "mdi:gradient-vertical",
+    ("gradient_type", "Appearance: Gradient Type", "mdi:gradient-vertical",
      ["Red-Blue", "Green-Yellow", "Cyan-Magenta", "Purple-Orange", "Blue-Yellow"],
      CONF_GRADIENT_TYPE,
      "set_ha_gradient_type"),
-    ("marker_style", "Marker Style", "mdi:marker",
+    ("marker_style", "Appearance: Marker Style", "mdi:marker",
      ["None", "Single Dot", "Gradient Peak"], "marker_style",
      "set_ha_marker_style"),
-    ("marker_color", "Marker Color", "mdi:palette",
+    ("marker_color", "Appearance: Marker Color", "mdi:palette",
      ["Blue", "White", "Yellow", "Red", "Green", "Cyan", "Magenta"],
      "marker_color",
      "set_ha_marker_color"),
-    ("day_fill", "Day Fill", "mdi:calendar-blank",
+    ("day_fill", "Appearance: Day Fill", "mdi:calendar-blank",
      ["Fixed", "Flat", "Shaded"], "day_fill",
      "set_ha_day_fill"),
-    ("year_event_style", "Year Event Style", "mdi:calendar-star",
+    ("year_event_style", "Appearance: Year Events", "mdi:calendar-star",
      ["None", "Pulse", "Markers"], "year_event_style",
      "set_ha_year_event_style"),
-    ("conway_speed", "Conway Speed", "mdi:speedometer",
+    ("conway_speed", "Game of Life: Speed", "mdi:speedometer",
      ["Fast (50ms)", "Normal (200ms)", "Slow (1000ms)"], "conway_speed",
      "set_ha_conway_speed"),
-    ("pomodoro_preset", "Pomodoro Preset", "mdi:timer-outline",
+    ("pomodoro_preset", "Pomodoro: Preset", "mdi:timer-outline",
      ["Classic (25/5)", "Deep Work (50/10)", "Ultradian (90/20)"], "pomodoro_preset",
      "set_ha_pomo_preset"),
 ]
 
 # (obj_id, name, icon, default_restore_on, conf_key, setter)
 CONFIG_SWITCHES = [
-    ("show_future",          "Show Future",      "mdi:eye-outline", True,  None, "set_ha_show_future"),
-    ("gol_complex_patterns", "Complex Patterns", "mdi:puzzle",      False, None, "set_ha_complex_patterns"),
-    ("exercise_snacks",      "Exercise Snacks",  "mdi:run",         True,  None, "set_ha_exercise_snacks"),
+    ("show_future",          "Appearance: Show Future",        "mdi:eye-outline", True,  None, "set_ha_show_future"),
+    ("gol_complex_patterns", "Game of Life: Complex Patterns", "mdi:puzzle",      False, None, "set_ha_complex_patterns"),
+    ("exercise_snacks",      "Pomodoro: Exercise Snacks",      "mdi:run",         True,  None, "set_ha_exercise_snacks"),
 ]
 
 
@@ -518,7 +555,7 @@ async def to_code(config):
     style_names = {v: k for k, v in DISPLAY_STYLES.items()}
     style_initial = style_names.get(config[CONF_STYLE], "Single Color")
     style_sel = await gen_select(
-        "style", "Style", "mdi:palette",
+        "style", "Appearance: Style", "mdi:palette",
         ["Single Color", "Gradient", "Time Segments", "Rainbow"],
         style_initial,
     )
@@ -560,86 +597,87 @@ async def to_code(config):
     ls = config.get(CONF_LIFESPAN) or {}
 
     NUMBERS = [
-        ("display_brightness", "Brightness",       "mdi:brightness-6",
-         1, 100, 1, 20, "%",  "set_ha_display_brightness"),
-        ("night_mode_level",   "Night Mode",        "mdi:weather-night",
-         0, 3,   1, 3,  "lvl", "set_ha_night_mode_level"),
-        ("cycle_time_s",       "Screen Cycle Time", "mdi:timer",
-         1, 60,  1, int(config[CONF_SCREEN_CYCLE_TIME].total_seconds), "s", "set_ha_cycle_time"),
-        ("bed_time_hour",      "Bed Time Hour",     "mdi:bed",
-         0, 23,  1, ts.get(CONF_BED_TIME_HOUR, 22), "h", "set_ha_bed_time_hour"),
-        ("work_start_hour",    "Work Start Hour",   "mdi:briefcase",
-         0, 23,  1, ts.get(CONF_WORK_START_HOUR, 9), "h", "set_ha_work_start_hour"),
-        ("work_end_hour",      "Work End Hour",     "mdi:briefcase-clock",
-         0, 23,  1, ts.get(CONF_WORK_END_HOUR, 17), "h", "set_ha_work_end_hour"),
-        ("pomodoro_rounds",    "Pomodoro Rounds",   "mdi:repeat",
-         2, 8,   1, 4, "", "set_ha_pomo_rounds"),
-        ("ls_moved_out",       "Moved Out (age)",   "mdi:home-export-outline",
-         14, 40, 1, ls.get(CONF_LS_MOVED_OUT, 18),   "yr", "set_ls_moved_out_entity"),
-        ("ls_school_years",    "School Years",      "mdi:school",
-         8, 25,  1, ls.get(CONF_LS_SCHOOL_YEARS, 12), "yr", "set_ls_school_years_entity"),
-        ("ls_retirement",      "Retirement (age)",  "mdi:beach",
-         50, 90, 1, ls.get(CONF_LS_RETIREMENT, 70),  "yr", "set_ls_retirement_entity"),
-        ("ls_life_expectancy", "Life Expectancy",   "mdi:heart-pulse",
-         40, 110, 1, ls.get(CONF_LS_LIFE_EXPECTANCY, 90), "yr", "set_ls_life_expectancy_entity"),
-        ("ls_phase_cycle",     "Phase Cycle Time",  "mdi:timer-outline",
-         0, 30,  1, ls.get(CONF_LS_PHASE_CYCLE, 3),  "s", "set_ls_phase_cycle_entity"),
+        ("display_brightness", "Display: Brightness",       "mdi:brightness-6",
+         1, 100, 1, 20, "%",  ENTITY_CATEGORY_CONFIG, "set_ha_display_brightness"),
+        ("night_mode_level",   "Display: Night Mode",        "mdi:weather-night",
+         0, 3,   1, 3,  "lvl", ENTITY_CATEGORY_CONFIG, "set_ha_night_mode_level"),
+        ("cycle_time_s",       "Display: Screen Cycle Time", "mdi:timer",
+         1, 60,  1, int(config[CONF_SCREEN_CYCLE_TIME].total_seconds), "s", ENTITY_CATEGORY_CONFIG, "set_ha_cycle_time"),
+        ("bed_time_hour",      "Time Segments: Bed Hour",    "mdi:bed",
+         0, 23,  1, ts.get(CONF_BED_TIME_HOUR, 22), "h", ENTITY_CATEGORY_CONFIG, "set_ha_bed_time_hour"),
+        ("work_start_hour",    "Time Segments: Work Start",  "mdi:briefcase",
+         0, 23,  1, ts.get(CONF_WORK_START_HOUR, 9), "h", ENTITY_CATEGORY_CONFIG, "set_ha_work_start_hour"),
+        ("work_end_hour",      "Time Segments: Work End",    "mdi:briefcase-clock",
+         0, 23,  1, ts.get(CONF_WORK_END_HOUR, 17), "h", ENTITY_CATEGORY_CONFIG, "set_ha_work_end_hour"),
+        ("pomodoro_rounds",    "Pomodoro: Rounds",           "mdi:repeat",
+         2, 8,   1, 4, "", ENTITY_CATEGORY_CONFIG, "set_ha_pomo_rounds"),
+        ("ls_moved_out",       "Lifespan: Moved Out Age",    "mdi:home-export-outline",
+         14, 40, 1, ls.get(CONF_LS_MOVED_OUT, 18),   "yr", ENTITY_CATEGORY_DIAGNOSTIC, "set_ls_moved_out_entity"),
+        ("ls_school_years",    "Lifespan: School Years",     "mdi:school",
+         8, 25,  1, ls.get(CONF_LS_SCHOOL_YEARS, 12), "yr", ENTITY_CATEGORY_DIAGNOSTIC, "set_ls_school_years_entity"),
+        ("ls_retirement",      "Lifespan: Retirement Age",   "mdi:beach",
+         50, 90, 1, ls.get(CONF_LS_RETIREMENT, 70),  "yr", ENTITY_CATEGORY_DIAGNOSTIC, "set_ls_retirement_entity"),
+        ("ls_life_expectancy", "Lifespan: Life Expectancy",  "mdi:heart-pulse",
+         40, 110, 1, ls.get(CONF_LS_LIFE_EXPECTANCY, 90), "yr", ENTITY_CATEGORY_DIAGNOSTIC, "set_ls_life_expectancy_entity"),
+        ("ls_phase_cycle",     "Lifespan: Phase Cycle Time", "mdi:timer-outline",
+         0, 30,  1, ls.get(CONF_LS_PHASE_CYCLE, 3),  "s", ENTITY_CATEGORY_DIAGNOSTIC, "set_ls_phase_cycle_entity"),
     ]
-    for obj_id, name, icon, mn, mx, step, initial, unit, setter in NUMBERS:
-        n = await gen_number(obj_id, name, icon, mn, mx, step, initial, unit)
+    for obj_id, name, icon, mn, mx, step, initial, unit, category, setter in NUMBERS:
+        n = await gen_number(obj_id, name, icon, mn, mx, step, initial, unit, category)
         cg.add(getattr(var, setter)(n))
 
     # -----------------------------------------------------------------------
     # Auto-generate text input entities
     # -----------------------------------------------------------------------
     TEXTS = [
-        ("year_events",        "Year Events",              "mdi:calendar-star",
-         config.get(CONF_YEAR_EVENTS, ""),    "set_year_events_entity"),
-        ("exercise_list",      "Exercise List",            "mdi:dumbbell",
-         config.get(CONF_EXERCISE_LIST, ""),  "set_exercise_list_entity"),
-        ("time_override",      "Time Override (Testing)",  "mdi:clock-edit-outline",
-         "",                                  "set_time_override_entity"),
-        ("pomo_test_phase",    "Pomodoro Test Phase",      "mdi:bug",
-         "",                                  "set_pomo_test_phase_entity"),
-        ("ls_birthday",        "My Birthday",              "mdi:cake-variant",
-         ls.get(CONF_LS_BIRTHDAY, ""),        "set_ls_birthday_entity"),
-        ("ls_kids",            "Children's Birthdays",     "mdi:human-child",
-         ls.get(CONF_LS_KIDS, ""),            "set_ls_kids_entity"),
-        ("ls_parents",         "Parents",                  "mdi:human-male-female",
-         ls.get(CONF_LS_PARENTS, ""),         "set_ls_parents_entity"),
-        ("ls_siblings",        "Siblings' Birthdays",      "mdi:human-male-male",
-         ls.get(CONF_LS_SIBLINGS, ""),        "set_ls_siblings_entity"),
-        ("ls_milestones",      "Milestones",               "mdi:flag-checkered",
-         ls.get(CONF_LS_MILESTONES, ""),      "set_ls_milestones_entity"),
-        ("ls_partner_ranges",  "Living with Partner",      "mdi:home-heart",
-         ls.get(CONF_LS_PARTNER_RANGES, ""),  "set_ls_partner_ranges_entity"),
-        ("ls_marriage_ranges", "Marriage",                 "mdi:ring",
-         ls.get(CONF_LS_MARRIAGE_RANGES, ""), "set_ls_marriage_ranges_entity"),
+        # CONFIG — frequently used
+        ("year_events",        "Year Events",          "mdi:calendar-star",
+         config.get(CONF_YEAR_EVENTS, ""),    "set_year_events_entity",        ENTITY_CATEGORY_CONFIG, False),
+        ("exercise_list",      "Exercise List",        "mdi:dumbbell",
+         config.get(CONF_EXERCISE_LIST, ""),  "set_exercise_list_entity",      ENTITY_CATEGORY_CONFIG, False),
+        # INTERNAL — hidden from HA
+        ("time_override",      "Time Override",        "mdi:clock-edit-outline",
+         "",                                  "set_time_override_entity",      ENTITY_CATEGORY_CONFIG, True),
+        ("pomo_test_phase",    "Pomodoro Test Phase",  "mdi:bug",
+         "",                                  "set_pomo_test_phase_entity",    ENTITY_CATEGORY_CONFIG, True),
+        # DIAGNOSTIC — biographical data, rarely changed
+        ("ls_birthday",        "Lifespan: Birthday",   "mdi:cake-variant",
+         ls.get(CONF_LS_BIRTHDAY, ""),        "set_ls_birthday_entity",        ENTITY_CATEGORY_DIAGNOSTIC, False),
+        ("ls_kids",            "Lifespan: Children",   "mdi:human-child",
+         ls.get(CONF_LS_KIDS, ""),            "set_ls_kids_entity",            ENTITY_CATEGORY_DIAGNOSTIC, False),
+        ("ls_parents",         "Lifespan: Parents",    "mdi:human-male-female",
+         ls.get(CONF_LS_PARENTS, ""),         "set_ls_parents_entity",         ENTITY_CATEGORY_DIAGNOSTIC, False),
+        ("ls_siblings",        "Lifespan: Siblings",   "mdi:human-male-male",
+         ls.get(CONF_LS_SIBLINGS, ""),        "set_ls_siblings_entity",        ENTITY_CATEGORY_DIAGNOSTIC, False),
+        ("ls_milestones",      "Lifespan: Milestones", "mdi:flag-checkered",
+         ls.get(CONF_LS_MILESTONES, ""),      "set_ls_milestones_entity",      ENTITY_CATEGORY_DIAGNOSTIC, False),
+        ("ls_partner_ranges",  "Lifespan: Partner",    "mdi:home-heart",
+         ls.get(CONF_LS_PARTNER_RANGES, ""),  "set_ls_partner_ranges_entity",  ENTITY_CATEGORY_DIAGNOSTIC, False),
+        ("ls_marriage_ranges", "Lifespan: Marriage",   "mdi:ring",
+         ls.get(CONF_LS_MARRIAGE_RANGES, ""), "set_ls_marriage_ranges_entity", ENTITY_CATEGORY_DIAGNOSTIC, False),
     ]
-    for obj_id, name, icon, initial, setter in TEXTS:
-        t = await gen_text(obj_id, name, icon, initial)
+    for obj_id, name, icon, initial, setter, category, internal in TEXTS:
+        t = await gen_text(obj_id, name, icon, initial, category, internal)
         cg.add(getattr(var, setter)(t))
 
     # -----------------------------------------------------------------------
     # Auto-generate Pomodoro Start button
     # -----------------------------------------------------------------------
-    btn = await gen_button("pomo_start_btn", "Pomodoro Start", "mdi:timer-play")
+    btn = await gen_button("pomo_start_btn", "Pomodoro: Start", "mdi:timer-play")
     cg.add(var.set_ha_pomo_start_button(btn))
 
     # -----------------------------------------------------------------------
     # Auto-generate Pomodoro Event Sensors
+    # ESPHome 2026+ removed runtime set_name/set_icon/set_internal from EntityBase.
+    # configure_entity_() is accessible here because setup() is a friend of EntityBase.
     # -----------------------------------------------------------------------
     pomo_event = cg.new_Pvariable(cv.declare_id(text_sensor.TextSensor)("pomo_event"))
-    cg.add(pomo_event.set_name("Pomodoro Event"))
-    cg.add(pomo_event.set_icon("mdi:timer-alert"))
-    cg.add(pomo_event.set_internal(True))
+    _configure_text_sensor(pomo_event, "Pomodoro Event", internal=True)
     cg.add(cg.App.register_text_sensor(pomo_event))
     cg.add(var.set_pomo_event_sensor(pomo_event))
 
     pomo_exercise = cg.new_Pvariable(cv.declare_id(text_sensor.TextSensor)("pomo_exercise"))
-    cg.add(pomo_exercise.set_name("Pomodoro Exercise"))
-    cg.add(pomo_exercise.set_icon("mdi:dumbbell"))
-    cg.add(pomo_exercise.set_internal(True))
+    _configure_text_sensor(pomo_exercise, "Pomodoro Exercise", internal=True)
     cg.add(cg.App.register_text_sensor(pomo_exercise))
     cg.add(var.set_pomo_exercise_sensor(pomo_exercise))
 
