@@ -635,11 +635,11 @@ async def to_code(config):
          config.get(CONF_YEAR_EVENTS, ""),    "set_year_events_entity",        ENTITY_CATEGORY_CONFIG, False),
         ("exercise_list",      "Exercise List",        "mdi:dumbbell",
          config.get(CONF_EXERCISE_LIST, ""),  "set_exercise_list_entity",      ENTITY_CATEGORY_CONFIG, False),
-        # INTERNAL — hidden from HA
+        # DIAGNOSTIC — testing/debug, accessible but not shown in main config
         ("time_override",      "Time Override",        "mdi:clock-edit-outline",
-         "",                                  "set_time_override_entity",      ENTITY_CATEGORY_CONFIG, True),
+         "",                                  "set_time_override_entity",      ENTITY_CATEGORY_DIAGNOSTIC, False),
         ("pomo_test_phase",    "Pomodoro Test Phase",  "mdi:bug",
-         "",                                  "set_pomo_test_phase_entity",    ENTITY_CATEGORY_CONFIG, True),
+         "",                                  "set_pomo_test_phase_entity",    ENTITY_CATEGORY_DIAGNOSTIC, False),
         # DIAGNOSTIC — biographical data, rarely changed
         ("ls_birthday",        "Lifespan: Birthday",   "mdi:cake-variant",
          ls.get(CONF_LS_BIRTHDAY, ""),        "set_ls_birthday_entity",        ENTITY_CATEGORY_DIAGNOSTIC, False),

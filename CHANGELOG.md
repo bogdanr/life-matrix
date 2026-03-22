@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2-0-0
 - **Lifespan entities in Diagnostic category** — biographical data (birthday, kids, parents,
   milestones, partner/marriage ranges, school years, retirement, life expectancy, phase cycle)
   appear in HA's collapsed "Diagnostic" section rather than the main Configuration section
-- **Internal debug entities** — `Time Override` and `Pomodoro Test Phase` are now marked
-  internal; they no longer appear in HA or the ESPHome web UI
+- **Debug entities in Diagnostic section** — `Time Override` and `Pomodoro Test Phase` appear
+  in HA's Diagnostic section (alongside the Lifespan biographical fields) rather than the main
+  Configuration section
 
 ### Fixed
 - **NVS key stability** — `finalize_entity_config()` now accepts an explicit `object_id` for
